@@ -16,6 +16,7 @@ tmp/
 build/
 dist/
 coverage/
+target/
 .env
 .env.*
 !.env.example

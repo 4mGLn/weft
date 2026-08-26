@@ -3,6 +3,6 @@
 | Decision | Status | Record |
 | --- | --- | --- |
 | Evidence-driven agentic development harness | Accepted | `docs/decisions/0001-agentic-development-harness.md` |
-| Implementation language and storage | Pending Phase 0 | — |
-| Canonical artifact representation | Pending Phase 0 | — |
-| Runtime packaging and deployment | Pending Phase 0 | — |
+| Rust, SQLite metadata, and filesystem CAS | Accepted | `docs/decisions/0002-implementation-foundation.md` |
+| Canonical `tree-delta-v1` artifact | Accepted | `docs/decisions/0002-implementation-foundation.md` |
+| Runtime packaging and deployment | Pending release ADR | — |
