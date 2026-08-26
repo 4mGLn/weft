@@ -6,7 +6,7 @@ It treats a Change—not a branch, worktree, commit, or agent session—as the d
 
 ## Project status
 
-Weft is in Phase 0: provider feasibility and domain validation. The repository currently contains the product specification and an evidence-driven development harness. No runtime, storage engine, CLI implementation, deployment image, or compatibility guarantee exists yet.
+Weft completed its Phase 0 provider feasibility baseline and has started Phase 1 with a Rust domain kernel. The storage engine, CLI, deployment image, and compatibility guarantees are not implemented yet.
 
 ## Start here
 
@@ -22,6 +22,15 @@ Weft is in Phase 0: provider feasibility and domain validation. The repository c
 ```bash
 make check
 ```
+
+The current executable provider evidence can be run with:
+
+```bash
+make phase0-native-git-spike
+make phase0-gitbutler-spike
+```
+
+The Phase 1 domain kernel is verified by `make check` and lives under `crates/weft-domain`.
 
 Material changes should start from the [task record template](docs/agent-harness/task-template.md), use the [verification matrix](docs/agent-harness/verification-matrix.md), and record durable design decisions under `docs/decisions/`.
 

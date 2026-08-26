@@ -23,7 +23,7 @@ jobs:
           tar -czf "weft-spec-${VERSION}.tar.gz" \
             README.md GOAL.md DOMAIN.md ROADMAP.md AGENTS.md \
             CONTRIBUTING.md SECURITY.md CHANGELOG.md \
-            docs .agent .agents
+            Makefile docs scripts .agent .agents .codex
           sha256sum "weft-spec-${VERSION}.tar.gz" > "weft-spec-${VERSION}.sha256"
       - name: Publish GitHub release
         env:

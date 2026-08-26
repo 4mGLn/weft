@@ -8,7 +8,13 @@ Run all repository checks from the root:
 make check
 ```
 
-The current gate validates the agent harness and local Markdown links. Once Phase 0 selects implementation technology, language-specific format, unit, static-analysis, integration, and package checks will be added behind the same entry point.
+The current gate validates the agent harness, local Markdown links, Rust formatting, workspace tests, and Clippy warnings. Provider spikes remain explicit targets because the GitButler spike requires a local GitButler installation and registry access.
+
+## Rust workspace
+
+Phase 1 uses the pinned toolchain in `rust-toolchain.toml`. Keep domain invariants in `crates/weft-domain` independent of SQLite, subprocesses, and provider JSON. Storage and provider crates will depend inward on domain types, never the reverse.
+
+The stable `make check` gate explicitly tests the active Rust host target so a developer's global cross-compilation default cannot silently change local verification. Cross-target builds will become separate release-matrix gates after packaging is decided.
 
 ## Work lifecycle
 

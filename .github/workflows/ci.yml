@@ -17,3 +17,5 @@ jobs:
           persist-credentials: false
       - name: Verify repository harness and documentation
         run: make check
+      - name: Verify Native Git feasibility contract
+        run: make phase0-native-git-spike
