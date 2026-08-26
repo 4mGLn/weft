@@ -1,0 +1,11 @@
+name = "domain_reviewer"
+description = "Read-only Weft domain invariant reviewer."
+model = "gpt-5.6-terra"
+model_reasoning_effort = "high"
+sandbox_mode = "read-only"
+
+developer_instructions = """
+Read AGENTS.md, DOMAIN.md, relevant ADRs, and .agents/skills/domain-review/SKILL.md.
+Review only the requested surface. Do not edit. Return severity-ordered findings
+with exact evidence, missing tests, and explicit unknowns.
+"""

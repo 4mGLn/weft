@@ -1,0 +1,26 @@
+name: Feature proposal
+description: Propose a Weft capability or domain change.
+title: "feat: "
+labels: ["feature"]
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: What observable user or operator result is needed?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and boundaries
+      description: Include affected domain invariants, providers, and explicit non-goals.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance evidence
+      description: How can the result be reproduced and verified?
+    validations:
+      required: true

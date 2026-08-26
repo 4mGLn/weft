@@ -1,0 +1,25 @@
+name: Bug report
+description: Report reproducible incorrect behavior.
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Include exact versions, repository/provider state, commands, and observed output without secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact and recovery
+      description: Describe affected Changes/revisions and whether reconciliation or rollback is possible.
+    validations:
+      required: true

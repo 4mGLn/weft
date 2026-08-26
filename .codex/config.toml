@@ -1,0 +1,15 @@
+[agents]
+max_threads = 4
+max_depth = 1
+
+[agents.domain_reviewer]
+description = "Read-only reviewer for Weft domain identity, revision, candidate, concurrency, review, and integration invariants."
+config_file = "agents/domain-reviewer.toml"
+
+[agents.provider_reviewer]
+description = "Read-only reviewer for Native Git/GitButler mappings, capability differences, conflicts, and reconciliation."
+config_file = "agents/provider-reviewer.toml"
+
+[agents.release_reviewer]
+description = "Read-only reviewer for Weft artifacts, CI, publication, installation, rollback, and provenance."
+config_file = "agents/release-reviewer.toml"
