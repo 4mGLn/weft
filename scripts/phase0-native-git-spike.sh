@@ -77,6 +77,8 @@ assert_eq "$(git -C "$repo" rev-parse "$change_b^{tree}")" \
 # A changed target rejects the planned integration instead of silently replanning.
 target="$spike_root/target"
 git clone --quiet "$repo" "$target"
+git -C "$target" config user.name "Weft Phase 0"
+git -C "$target" config user.email "phase0@weft.invalid"
 git -C "$target" config commit.gpgSign false
 git -C "$target" switch --quiet -c target "$base"
 expected_target="$(git -C "$target" rev-parse HEAD)"
