@@ -1,24 +1,35 @@
 # Deployment and Release Policy
 
-## Current phase
+## Supported runtime
 
-Weft has no deployable runtime yet. Until Phase 0 selects the implementation and packaging model, releases contain verified specifications and development-harness artifacts only. Do not add placeholder containers, services, installers, or infrastructure that imply unsupported runtime behavior.
+The first deployable surface is the local `weft` CLI built and smoke-tested on GitHub-hosted Ubuntu 24.04 x86_64. Other GNU/Linux distributions and glibc versions may work but are not supported claims. It is not a daemon and opens no network listener. The caller chooses a state directory and grants access only to identities that coordinate that repository. Native Git requires Git 2.38 or newer.
 
-## Specification releases
+Tags matching `vMAJOR.MINOR.PATCH` run the repository gate, build a relocatable archive, smoke-test it in a clean temporary prefix, publish SHA-256 checksums and a CycloneDX dependency inventory, and attach GitHub build provenance. A tag must point to a commit on `main`. Publication requires explicit authorization.
 
-Tags matching `v*` run the repository gate, create a versioned specification bundle, and publish it through GitHub Releases. The bundle includes product/domain/roadmap documents, contribution and security guidance, agent context, decisions, and task/verification templates.
+## Install and health
 
-## Runtime release requirements
+Verify the adjacent checksum, extract the archive, and install without elevated privileges:
 
-Before the first runtime release, record an ADR covering:
+```bash
+sha256sum -c weft-0.1.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar -xzf weft-0.1.0-x86_64-unknown-linux-gnu.tar.gz
+PREFIX="$HOME/.local" ./weft-0.1.0-x86_64-unknown-linux-gnu/install.sh
+weft --version
+weft --help
+```
 
-- supported operating systems and architectures;
-- artifact and canonical-content storage layout;
-- config, data, cache, log, and secret ownership;
-- Native Git and GitButler prerequisites and capability detection;
-- service identity, filesystem and network permissions;
-- installation, unattended setup, health, upgrade, rollback, and uninstall behavior;
-- checksums, provenance, SBOM, signing, and vulnerability scanning;
-- compatibility and migration policy.
+Operational health is a successful process invocation against the intended state directory. There is no service health endpoint. Configuration consists of explicit CLI arguments. Weft owns metadata/database and canonical artifacts under the selected state directory. It owns no credentials, network cache, or log directory. Provider repositories and worktrees remain outside it.
 
-Release proof must include a clean environment, restart/recovery, provider divergence, partial integration reconciliation, upgrade, and rollback. Publishing or signing requires explicit authorization.
+## Upgrade, rollback, and uninstall
+
+Before upgrade, stop mutating callers and preserve the current binary plus the entire state directory. Install the new archive over the same prefix, run `weft --version`, and read representative Changes, candidates, and IntegrationAttempts. Schema migration occurs when state opens and must not be interrupted.
+
+Rollback the binary only when its documented schema range includes the opened database. Otherwise restore the pre-upgrade state-directory backup together with the old binary. Never mix a restored database with newer canonical-artifact contents. `uninstall.sh` removes only the binary; state is deliberately retained and must be deleted separately by an operator using an exact path.
+
+## Evidence and unsupported claims
+
+The archive smoke test proves checksum verification, clean installation, process restart, and uninstall retention. Repository tests prove provider divergence and partial-integration reconciliation. Upgrade/rollback against an earlier public runtime is unavailable until a prior runtime exists.
+
+GitButler currently requires exactly `but 0.22.0`, a local SHA-1 repository, and a writable GitButler project registry. Its only mutating capability is repository-local `gb-local` fast-forward landing. Canonical import, remote landing, provider reconnect, credentials, remote policy enforcement, artifact signing, vulnerability scanning, additional platforms, package managers, auto-update, services, containers, and hosted deployment are not release claims.
+
+Any release-surface expansion requires an ADR and proof for operating systems/architectures, storage ownership, permissions, provider prerequisites, unattended setup, health, migration, upgrade, rollback, uninstall, checksums, provenance, SBOM, signing, and vulnerability scanning.

@@ -3,6 +3,15 @@
 | Decision | Status | Record |
 | --- | --- | --- |
 | Evidence-driven agentic development harness | Accepted | `docs/decisions/0001-agentic-development-harness.md` |
-| Implementation language and storage | Pending Phase 0 | — |
-| Canonical artifact representation | Pending Phase 0 | — |
-| Runtime packaging and deployment | Pending Phase 0 | — |
+| Rust, SQLite metadata, and filesystem CAS | Accepted | `docs/decisions/0002-implementation-foundation.md` |
+| Canonical `tree-delta-v1` artifact | Accepted | `docs/decisions/0002-implementation-foundation.md`, `docs/decisions/0003-tree-delta-v1-wire-format.md` |
+| Durable assignments and versioned operation leases | Accepted | `docs/decisions/0004-assignment-and-lease-concurrency.md` |
+| Exact-revision Materialization lifecycle and provider observations | Accepted | `docs/decisions/0005-materialization-lifecycle.md` |
+| Exact dependency graph and contextual relationships | Accepted | `docs/decisions/0006-exact-dependency-graph.md` |
+| Versioned Stacks and exact CompositionCandidates | Accepted | `docs/decisions/0007-exact-composition-candidates.md` |
+| Exact-target review and validation evidence | Accepted | `docs/decisions/0008-exact-target-review-validation.md` |
+| Target-scoped integration authority, reconciliation, and verified receipts | Accepted | `docs/decisions/0009-integration-reconciliation-receipts.md` |
+| Exact local Native Git capability adapter | Accepted | `docs/decisions/0010-native-git-exact-local-adapter.md` |
+| Exact GitButler 0.22 local capability adapter | Accepted | `docs/decisions/0011-gitbutler-0-22-local-adapter.md` |
+| Stable local CLI v1 contract | Accepted | `docs/decisions/0012-stable-local-cli-v1.md` |
+| Provider-neutral agent protocol, Paseo boundary, and local runtime release | Accepted | `docs/decisions/0013-agent-protocol-and-local-runtime-release.md` |

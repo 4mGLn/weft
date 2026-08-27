@@ -8,11 +8,14 @@ import sys
 from pathlib import Path
 from urllib.parse import unquote
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(sys.argv[1]).resolve() if len(sys.argv) == 2 else Path(__file__).resolve().parent.parent
 LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 
 
 def main() -> int:
+    if len(sys.argv) > 2:
+        print(f"usage: {sys.argv[0]} [ROOT]", file=sys.stderr)
+        return 2
     failures: list[str] = []
     for document in sorted(ROOT.rglob("*.md")):
         if any(part.startswith(".") and part not in {".agent", ".agents", ".github"} for part in document.relative_to(ROOT).parts):

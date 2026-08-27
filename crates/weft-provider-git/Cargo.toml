@@ -1,0 +1,17 @@
+[package]
+name = "weft-provider-git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+weft-artifact = { path = "../weft-artifact" }
+weft-domain = { path = "../weft-domain" }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints]
+workspace = true
