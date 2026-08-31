@@ -41,7 +41,7 @@
 | Focused | `make test-upgrade-rollback` | Passed | Public `v0.1.0` to local `v0.1.1` candidate, direct rollback, and snapshot restore. |
 | Static/harness | `make check` | Passed | 129 active workspace tests, formatting, Clippy, harness, and docs. |
 | Package/deployment | `make package-release`, `make test-release` | Passed | `v0.1.1` candidate archive, checksum/SBOM, clean install, restart, and uninstall retention. |
-| Public CI | repository gate | Pending | |
+| Public CI | repository gate | Passed | [run 33359105845](https://github.com/4mGLn/weft/actions/runs/33359105845) downloaded public `v0.1.0` and completed the candidate checkpoint. |
 
 ## Decision and follow-up
 
