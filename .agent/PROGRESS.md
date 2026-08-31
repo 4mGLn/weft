@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 7 — local agentic development/deployment ecosystem complete.
+Phase 8 — local-runtime upgrade/rollback checkpoint ready for CI.
 
 ## Completed
 
@@ -187,11 +187,16 @@ Phase 7 — local agentic development/deployment ecosystem complete.
   ignored provider/process helpers, documentation/harness checks, warning-free
   strict Clippy, `git diff --check`, archive checksum/SBOM/install/restart/uninstall
   proof, and the full `make check` gate.
+- Published the signed, GitHub-provenanced public `v0.1.0` Ubuntu 24.04 x86_64
+  runtime archive with checksums and a CycloneDX SBOM.
+- Added an archive-to-archive upgrade/rollback checkpoint from that public runtime
+  to the unpublished `v0.1.1` candidate, including durable-state reads after direct
+  rollback and complete pre-upgrade state-snapshot restoration.
 
 ## Next checkpoint
 
-Complete final domain/release read-only review, then initialize and publish the
-requested public `4mGLn/weft` GitHub repository without creating a runtime tag.
+Run the public `main` gate for the `v0.1.1` candidate, then retain the checkpoint
+for the next authorized runtime release.
 
 ## Known gaps
 
@@ -200,5 +205,7 @@ requested public `4mGLn/weft` GitHub repository without creating a runtime tag.
 - Runtime distribution is limited to a local Ubuntu 24.04 x86_64 archive. There is
   no hosted service, container, package-manager channel, auto-update, artifact
   signing, vulnerability scan, remote-provider deployment, or non-Linux proof.
-- Real upgrade/rollback proof remains unavailable until an earlier public runtime exists.
+- Direct rollback is proven only for the shared schema-7 `v0.1.0`/`v0.1.1`
+  boundary; migration rollback still requires an explicit compatible-schema claim
+  or complete state-snapshot restoration proof.
 - No software license selected.

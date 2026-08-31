@@ -13,8 +13,9 @@ test -f "$archive"
 test -f "$checksum"
 test -f "$sbom"
 test -f "$sbom.sha256"
-sha256sum -c "$checksum"
-sha256sum -c "$sbom.sha256"
+archive_dir=$(dirname "$archive")
+(cd "$archive_dir" && sha256sum -c "$(basename "$checksum")")
+(cd "$archive_dir" && sha256sum -c "$(basename "$sbom.sha256")")
 python3 -m json.tool "$sbom" >/dev/null
 root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT HUP INT TERM
