@@ -7,7 +7,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-rusqlite = "0.39.0"
+rusqlite = "0.40.2"
 weft-artifact = { path = "../weft-artifact" }
 weft-domain = { path = "../weft-domain" }
 
