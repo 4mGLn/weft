@@ -57,7 +57,7 @@ jobs:
           gh release download "$BASELINE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "weft-${BASELINE_VERSION}-x86_64-unknown-linux-gnu.*" --dir dist/previous
           make test-upgrade-rollback FROM_ARCHIVE="dist/previous/weft-${BASELINE_VERSION}-x86_64-unknown-linux-gnu.tar.gz" TO_ARCHIVE="dist/weft-${VERSION#v}-x86_64-unknown-linux-gnu.tar.gz"
       - name: Attest runtime archive
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: dist/weft-*.tar.gz
       - name: Publish GitHub release
