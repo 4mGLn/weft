@@ -16,13 +16,13 @@ esac
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
-target=x86_64-unknown-linux-gnu
+target=${WEFT_RELEASE_TARGET:-x86_64-unknown-linux-musl}
 package="weft-${version#v}-${target}"
 
 build_archive() {
     name=$1
     output="$work/$name/dist"
-    CARGO_TARGET_DIR="$work/$name/target" "$root/scripts/package-release.sh" "$version" "$output" >/dev/null
+    WEFT_RELEASE_TARGET="$target" CARGO_TARGET_DIR="$work/$name/target" "$root/scripts/package-release.sh" "$version" "$output" >/dev/null
 }
 
 build_archive first
