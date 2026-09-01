@@ -17,7 +17,7 @@ jobs:
   release:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -42,6 +42,7 @@ jobs:
         run: |
           make package-release VERSION="$VERSION"
           make test-release ARCHIVE="dist/weft-${VERSION#v}-x86_64-unknown-linux-gnu.tar.gz"
+          make test-release-reproducibility VERSION="$VERSION"
       - name: Verify upgrade and rollback from the latest prior runtime
         env:
           GH_TOKEN: ${{ github.token }}
@@ -56,13 +57,11 @@ jobs:
           gh release download "$BASELINE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "weft-${BASELINE_VERSION}-x86_64-unknown-linux-gnu.*" --dir dist/previous
           make test-upgrade-rollback FROM_ARCHIVE="dist/previous/weft-${BASELINE_VERSION}-x86_64-unknown-linux-gnu.tar.gz" TO_ARCHIVE="dist/weft-${VERSION#v}-x86_64-unknown-linux-gnu.tar.gz"
       - name: Attest runtime archive
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: |
-            dist/weft-*.tar.gz
-            dist/weft-*.cdx.json
+          subject-path: dist/weft-*.tar.gz
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ github.ref_name }}
-        run: gh release create "$VERSION" dist/weft-* --verify-tag --generate-notes
+        run: gh release create "$VERSION" "dist/weft-${VERSION#v}-x86_64-unknown-linux-gnu.tar.gz" --verify-tag --generate-notes
