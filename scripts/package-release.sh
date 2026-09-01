@@ -9,6 +9,7 @@ fi
 version=$1
 output_dir=${2:-dist}
 target=${WEFT_RELEASE_TARGET:-x86_64-unknown-linux-gnu}
+build_root=${CARGO_TARGET_DIR:-target}
 
 if ! printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
     echo "VERSION must be a v-prefixed semantic version" >&2
@@ -26,15 +27,15 @@ stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT HUP INT TERM
 
 cd "$root"
-cargo build --locked --release --target "$target" -p weft-cli
+cargo build --locked --release --target "$target" --target-dir "$build_root" -p weft-cli
 expected_version="weft ${version#v}"
-actual_version=$("target/$target/release/weft" --version)
+actual_version=$("$build_root/$target/release/weft" --version)
 if [ "$actual_version" != "$expected_version" ]; then
     echo "binary version mismatch: expected $expected_version, got $actual_version" >&2
     exit 1
 fi
 mkdir -p "$stage/$package/bin" "$stage/$package/docs" "$stage/$package/scripts"
-install -m 0755 "target/$target/release/weft" "$stage/$package/bin/weft"
+install -m 0755 "$build_root/$target/release/weft" "$stage/$package/bin/weft"
 install -m 0755 packaging/install.sh packaging/uninstall.sh "$stage/$package/"
 install -m 0644 README.md GOAL.md DOMAIN.md ROADMAP.md AGENTS.md CONTRIBUTING.md SECURITY.md CHANGELOG.md "$stage/$package/"
 cp -R docs/. "$stage/$package/docs/"
