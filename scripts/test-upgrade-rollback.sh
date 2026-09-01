@@ -17,6 +17,9 @@ verify_archive() {
     checksum="$archive.sha256"
     sbom="${archive%.tar.gz}.cdx.json"
     test -f "$archive" || fail "archive is missing: $archive"
+    if [ ! -f "$checksum" ] && [ ! -f "$sbom" ] && [ ! -f "$sbom.sha256" ]; then
+        return
+    fi
     test -f "$checksum" || fail "archive checksum is missing: $checksum"
     test -f "$sbom" || fail "SBOM is missing: $sbom"
     test -f "$sbom.sha256" || fail "SBOM checksum is missing: $sbom.sha256"
@@ -42,6 +45,18 @@ extract_package() {
     printf '%s\n' "$package_dir"
 }
 
+verify_embedded_sbom() {
+    package_dir=$1
+    sbom="$package_dir/SBOM.cdx.json"
+    if [ ! -f "$sbom" ]; then
+        sbom="$package_dir/docs/SBOM.cdx.json"
+    fi
+    test -f "$sbom" || fail "archive has no embedded SBOM: $package_dir"
+    python3 -m json.tool "$sbom" >/dev/null
+    (cd "$package_dir" && sha256sum -c MANIFEST.sha256 >/dev/null) \
+        || fail "archive manifest verification failed: $package_dir"
+}
+
 verify_archive "$from_archive"
 verify_archive "$to_archive"
 
@@ -49,6 +64,8 @@ root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT HUP INT TERM
 from_package=$(extract_package "$from_archive" "$root/from")
 to_package=$(extract_package "$to_archive" "$root/to")
+verify_embedded_sbom "$from_package"
+verify_embedded_sbom "$to_package"
 from_version=$("$from_package/bin/weft" --version)
 to_version=$("$to_package/bin/weft" --version)
 test "$from_version" != "$to_version" || fail "archives must contain distinct runtime versions"
