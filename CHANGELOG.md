@@ -8,6 +8,10 @@ All notable project changes will be documented here.
 
 - Archive-to-archive `v0.1.0` to `v0.1.1` candidate upgrade/rollback proof with checksum/SBOM verification, durable-state compatibility, and complete pre-upgrade snapshot restoration.
 
+### Changed
+
+- Runtime releases publish only the installable archive. The archive no longer ships project documentation or development helpers; its embedded root SBOM remains covered by CI and provenance verification.
+
 ## 0.1.0 - 2026-08-27
 
 ### Added

@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 8 — release reproducibility checkpoint ready for CI.
+Phase 8 — minimal runtime archive checkpoint ready for CI.
 
 ## Completed
 
@@ -195,11 +195,15 @@ Phase 8 — release reproducibility checkpoint ready for CI.
 - Added a same-runner reproducibility checkpoint that builds the `v0.1.1`
   candidate twice from independent target directories and compares the archive,
   checksums, and SBOM byte-for-byte.
+- Minimized the next runtime archive to the binary, install/uninstall helpers,
+  a small operator reference, embedded SBOM, and manifest; project documentation
+  and development helpers remain source-only, while releases publish only the
+  installable archive.
 
 ## Next checkpoint
 
-Run the public `main` gate for release reproducibility, then retain both release
-checkpoints for the next authorized `v0.1.1` runtime release.
+Run the public pull-request gate for the minimal runtime archive, then retain all
+release checkpoints for the next authorized `v0.1.1` runtime release.
 
 ## Known gaps
 

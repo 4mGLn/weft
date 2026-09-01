@@ -9,6 +9,8 @@ fi
 
 from_archive=$1
 to_archive=$2
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+. "$script_dir/hash-utils.sh"
 
 fail() { printf 'upgrade/rollback smoke test failed: %s\n' "$*" >&2; exit 1; }
 
@@ -17,17 +19,14 @@ verify_archive() {
     checksum="$archive.sha256"
     sbom="${archive%.tar.gz}.cdx.json"
     test -f "$archive" || fail "archive is missing: $archive"
+    if [ ! -f "$checksum" ] && [ ! -f "$sbom" ] && [ ! -f "$sbom.sha256" ]; then
+        return
+    fi
     test -f "$checksum" || fail "archive checksum is missing: $checksum"
     test -f "$sbom" || fail "SBOM is missing: $sbom"
     test -f "$sbom.sha256" || fail "SBOM checksum is missing: $sbom.sha256"
-    archive_digest=$(awk 'NR == 1 { print $1 } END { if (NR != 1) exit 1 }' "$checksum") \
-        || fail "archive checksum is malformed: $checksum"
-    sbom_digest=$(awk 'NR == 1 { print $1 } END { if (NR != 1) exit 1 }' "$sbom.sha256") \
-        || fail "SBOM checksum is malformed: $sbom.sha256"
-    test "$archive_digest" = "$(sha256sum "$archive" | awk '{print $1}')" \
-        || fail "archive checksum does not match: $archive"
-    test "$sbom_digest" = "$(sha256sum "$sbom" | awk '{print $1}')" \
-        || fail "SBOM checksum does not match: $sbom"
+    verify_checksum "$checksum" "$archive" || fail "archive checksum does not match: $archive"
+    verify_checksum "$sbom.sha256" "$sbom" || fail "SBOM checksum does not match: $sbom"
     python3 -m json.tool "$sbom" >/dev/null
 }
 
@@ -42,6 +41,18 @@ extract_package() {
     printf '%s\n' "$package_dir"
 }
 
+verify_embedded_sbom() {
+    package_dir=$1
+    sbom="$package_dir/SBOM.cdx.json"
+    if [ ! -f "$sbom" ]; then
+        sbom="$package_dir/docs/SBOM.cdx.json"
+    fi
+    test -f "$sbom" || fail "archive has no embedded SBOM: $package_dir"
+    python3 -m json.tool "$sbom" >/dev/null
+    verify_manifest "$package_dir" "$package_dir/MANIFEST.sha256" \
+        || fail "archive manifest verification failed: $package_dir"
+}
+
 verify_archive "$from_archive"
 verify_archive "$to_archive"
 
@@ -49,6 +60,8 @@ root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT HUP INT TERM
 from_package=$(extract_package "$from_archive" "$root/from")
 to_package=$(extract_package "$to_archive" "$root/to")
+verify_embedded_sbom "$from_package"
+verify_embedded_sbom "$to_package"
 from_version=$("$from_package/bin/weft" --version)
 to_version=$("$to_package/bin/weft" --version)
 test "$from_version" != "$to_version" || fail "archives must contain distinct runtime versions"
