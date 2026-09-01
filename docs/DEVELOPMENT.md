@@ -23,10 +23,16 @@ Phase 1 uses the pinned toolchain in `rust-toolchain.toml`. Keep domain invarian
 `crates/weft-provider-gitbutler` owns the exact `but 0.22.0` adapter. It rejects unknown status shapes, normalizes `changeId` values only as provider references, maps exact base-to-tip stacks, exports canonical content through verified Git objects, reports conflicts and external rewrites/removals, and supports only exact repository-local fast-forward landing. The full gate runs hermetic declared-version fixtures. Run `make phase3-gitbutler-live` for the explicit live workflow; it uses disposable repositories and isolated XDG registry/config/cache directories and requires `but 0.22.0`.
 
 The repository-local Cargo configuration pins direct development commands to the
-supported Linux GNU target, so a developer-wide cross-compilation default cannot
-silently change local verification. `make check` also passes the active Rust host
-target explicitly. Cross-target builds will become separate release-matrix gates
-after packaging is decided.
+supported Linux GNU target, so a developer-wide Cargo configuration cannot silently
+change local verification. `make check` also passes the active Rust host target
+explicitly. An exported `CARGO_BUILD_TARGET` takes precedence over this repository
+configuration; unset it for direct local commands, for example:
+
+```bash
+env -u CARGO_BUILD_TARGET cargo run -p weft-cli -- --help
+```
+
+Cross-target builds are separate release-matrix gates.
 
 ## Local CLI
 
