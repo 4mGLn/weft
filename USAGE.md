@@ -22,8 +22,18 @@ reconciled; do not retry it blindly.
 
 ## Windows
 
-Windows has no supported prebuilt runtime yet. Install Rust and Git, then build
-from source in PowerShell:
+Install the latest supported Windows runtime from PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/4mGLn/weft/main/install.ps1 | iex
+```
+
+Set `WEFT_VERSION` to select an exact release, `WEFT_PREFIX` to choose the
+installation directory, or `WEFT_REPOSITORY` for a compatible fork. The script
+downloads the Windows archive over HTTPS and verifies GitHub's SHA-256 asset
+digest before invoking its installer.
+
+To build from source instead:
 
 ```powershell
 cargo install --git https://github.com/4mGLn/weft.git --package weft-cli

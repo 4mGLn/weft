@@ -17,7 +17,7 @@ if ! printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
 fi
 
 case "$target" in
-    x86_64-unknown-linux-musl|x86_64-apple-darwin|aarch64-apple-darwin) ;;
+    x86_64-unknown-linux-musl|x86_64-apple-darwin|aarch64-apple-darwin|x86_64-pc-windows-msvc) ;;
     *) echo "unsupported release target: $target" >&2; exit 2 ;;
 esac
 
@@ -29,16 +29,23 @@ stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT HUP INT TERM
 
 cd "$root"
+binary=weft
+case "$target" in x86_64-pc-windows-msvc) binary=weft.exe ;; esac
 cargo build --locked --release --target "$target" --target-dir "$build_root" -p weft-cli
 expected_version="weft ${version#v}"
-actual_version=$("$build_root/$target/release/weft" --version)
+actual_version=$("$build_root/$target/release/$binary" --version)
 if [ "$actual_version" != "$expected_version" ]; then
     echo "binary version mismatch: expected $expected_version, got $actual_version" >&2
     exit 1
 fi
 mkdir -p "$stage/$package/bin"
-install -m 0755 "$build_root/$target/release/weft" "$stage/$package/bin/weft"
-install -m 0755 packaging/install.sh packaging/uninstall.sh "$stage/$package/"
+install -m 0755 "$build_root/$target/release/$binary" "$stage/$package/bin/$binary"
+case "$target" in
+    x86_64-pc-windows-msvc)
+        install -m 0644 packaging/install.ps1 packaging/uninstall.ps1 "$stage/$package/"
+        ;;
+    *) install -m 0755 packaging/install.sh packaging/uninstall.sh "$stage/$package/" ;;
+esac
 install -m 0644 RUNTIME_README.md "$stage/$package/README.md"
 install -m 0644 GETTING_STARTED.md MANUAL.md USAGE.md LICENSE "$stage/$package/"
 

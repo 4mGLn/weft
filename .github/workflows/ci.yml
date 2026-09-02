@@ -13,6 +13,29 @@ permissions:
   contents: read
 
 jobs:
+  windows-runtime-archive:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build Windows runtime archive
+        shell: bash
+        run: |
+          VERSION="v$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          WEFT_RELEASE_TARGET=x86_64-pc-windows-msvc bash scripts/package-release.sh "$VERSION"
+      - name: Smoke test Windows archive installation
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
+          $archive = "dist/weft-$version-x86_64-pc-windows-msvc.tar.gz"
+          $root = Join-Path $env:RUNNER_TEMP 'weft-windows-runtime-smoke'
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          tar -xzf $archive -C $root
+          $package = Get-ChildItem -LiteralPath $root -Directory -Filter 'weft-*' | Select-Object -First 1
+          $prefix = Join-Path $root 'install'
+          & (Join-Path $package.FullName 'install.ps1') -Prefix $prefix
+          & (Join-Path $prefix 'bin/weft.exe') --version
   repository-gate:
     runs-on: ubuntu-24.04
     steps:
