@@ -9,5 +9,5 @@ noninteractive CLI contract and [the manual](MANUAL.md) for installation,
 upgrade, rollback, and support boundaries.
 
 `SBOM.cdx.json` is the embedded CycloneDX component inventory. `MANIFEST.sha256`
-lists SHA-256 digests for every other file in this archive. See [LICENSE](LICENSE)
-for the distribution status.
+lists SHA-256 digests for every other file in this archive. See `LICENSE` for
+the distribution status.
