@@ -46,8 +46,8 @@ case "$target" in
         ;;
     *) install -m 0755 packaging/install.sh packaging/uninstall.sh "$stage/$package/" ;;
 esac
-install -m 0644 RUNTIME_README.md "$stage/$package/README.md"
-install -m 0644 GETTING_STARTED.md MANUAL.md USAGE.md LICENSE "$stage/$package/"
+install -m 0644 docs/RUNTIME_README.md "$stage/$package/README.md"
+install -m 0644 docs/GETTING_STARTED.md docs/MANUAL.md docs/USAGE.md LICENSE "$stage/$package/"
 
 mkdir -p "$output_dir"
 archive="$output_dir/$package.tar.gz"

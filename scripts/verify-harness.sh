@@ -5,7 +5,8 @@ root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root_dir"
 
 required=(
-  README.md GOAL.md DOMAIN.md ROADMAP.md AGENTS.md CONTRIBUTING.md SECURITY.md
+  README.md AGENTS.md CONTRIBUTING.md SECURITY.md
+  docs/GOAL.md docs/DOMAIN.md docs/ROADMAP.md docs/CHANGELOG.md
   docs/DEVELOPMENT.md docs/DEPLOYMENT.md
   docs/agent-harness/README.md
   docs/agent-harness/task-template.md

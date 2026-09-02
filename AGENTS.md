@@ -6,9 +6,9 @@ This is the canonical project context for coding agents. Keep it concise and lin
 
 | Work | Source of truth |
 | --- | --- |
-| Product thesis, boundaries, success | `GOAL.md` |
-| Entities, invariants, lifecycle | `DOMAIN.md` |
-| Phases and provider spike | `ROADMAP.md` |
+| Product thesis, boundaries, success | `docs/GOAL.md` |
+| Entities, invariants, lifecycle | `docs/DOMAIN.md` |
+| Phases and provider spike | `docs/ROADMAP.md` |
 | Working protocol | `docs/agent-harness/README.md` |
 | Agent process protocol | `docs/AGENT_PROTOCOL.md` |
 | Paseo integration | `docs/PASEO.md` |
