@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, File, OpenOptions};
@@ -9,9 +10,12 @@ use std::time::Duration;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::artifact::{PathOperation, is_sha256_digest, sha256_digest};
-use crate::{CanonicalArtifact, ChangeError, ChangeId, RevisionId};
+use crate::{
+    AssignmentId, BaseState, CandidateId, CanonicalArtifact, ChangeError, ChangeId,
+    MaterializationId, RepositoryId, RevisionId, WorkspaceId,
+};
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 4;
 static NEXT_TEMPORARY_OBJECT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
@@ -193,6 +197,262 @@ pub struct AuditEvent {
     detail: String,
 }
 
+/// A durable record that a subject holds a role on a Change.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Assignment {
+    id: AssignmentId,
+    change_id: ChangeId,
+    subject: String,
+    role: String,
+    actor: String,
+    assigned_at_unix_ms: i64,
+}
+
+impl Assignment {
+    /// Creates a validated assignment event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for blank, padded, control-character, or oversized values.
+    pub fn new(
+        assignment_id: AssignmentId,
+        change_id: ChangeId,
+        subject: impl Into<String>,
+        role: impl Into<String>,
+        actor: impl Into<String>,
+        assigned_at_unix_ms: i64,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            id: assignment_id,
+            change_id,
+            subject: valid_event_value(subject.into(), "subject")?,
+            role: valid_event_value(role.into(), "role")?,
+            actor: valid_event_value(actor.into(), "actor")?,
+            assigned_at_unix_ms,
+        })
+    }
+
+    #[must_use]
+    pub fn assignment_id(&self) -> &AssignmentId {
+        &self.id
+    }
+    #[must_use]
+    pub fn change_id(&self) -> &ChangeId {
+        &self.change_id
+    }
+    #[must_use]
+    pub fn subject(&self) -> &str {
+        &self.subject
+    }
+    #[must_use]
+    pub fn role(&self) -> &str {
+        &self.role
+    }
+    #[must_use]
+    pub fn actor(&self) -> &str {
+        &self.actor
+    }
+    #[must_use]
+    pub const fn assigned_at_unix_ms(&self) -> i64 {
+        self.assigned_at_unix_ms
+    }
+}
+
+/// The provider-facing lifecycle of a realization of one immutable revision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MaterializationState {
+    Clean,
+    Dirty,
+    Diverged,
+    Suspended,
+    Released,
+    Invalidated,
+}
+
+impl MaterializationState {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Clean => "clean",
+            Self::Dirty => "dirty",
+            Self::Diverged => "diverged",
+            Self::Suspended => "suspended",
+            Self::Released => "released",
+            Self::Invalidated => "invalidated",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, StorageError> {
+        match value {
+            "clean" => Ok(Self::Clean),
+            "dirty" => Ok(Self::Dirty),
+            "diverged" => Ok(Self::Diverged),
+            "suspended" => Ok(Self::Suspended),
+            "released" => Ok(Self::Released),
+            "invalidated" => Ok(Self::Invalidated),
+            _ => Err(StorageError::Invariant("unknown materialization state")),
+        }
+    }
+
+    const fn may_transition_to(self, next: Self) -> bool {
+        match self {
+            Self::Clean => matches!(
+                next,
+                Self::Dirty | Self::Diverged | Self::Suspended | Self::Released | Self::Invalidated
+            ),
+            Self::Dirty => matches!(
+                next,
+                Self::Diverged | Self::Suspended | Self::Released | Self::Invalidated
+            ),
+            Self::Diverged => matches!(next, Self::Suspended | Self::Released | Self::Invalidated),
+            Self::Suspended => matches!(
+                next,
+                Self::Clean | Self::Dirty | Self::Diverged | Self::Released | Self::Invalidated
+            ),
+            Self::Released | Self::Invalidated => false,
+        }
+    }
+}
+
+/// Durable materialization metadata and its exact revision target.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Materialization {
+    id: MaterializationId,
+    revision_id: RevisionId,
+    workspace_id: WorkspaceId,
+    provider: String,
+    provider_ref: String,
+    state: MaterializationState,
+}
+
+impl Materialization {
+    #[must_use]
+    pub fn materialization_id(&self) -> &MaterializationId {
+        &self.id
+    }
+    #[must_use]
+    pub fn revision_id(&self) -> &RevisionId {
+        &self.revision_id
+    }
+    #[must_use]
+    pub fn workspace_id(&self) -> &WorkspaceId {
+        &self.workspace_id
+    }
+    #[must_use]
+    pub fn provider(&self) -> &str {
+        &self.provider
+    }
+    #[must_use]
+    pub fn provider_ref(&self) -> &str {
+        &self.provider_ref
+    }
+    #[must_use]
+    pub const fn state(&self) -> MaterializationState {
+        self.state
+    }
+}
+
+/// An exact upstream revision required by a downstream Change.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Dependency {
+    upstream_change: ChangeId,
+    upstream_revision: RevisionId,
+    downstream_change: ChangeId,
+}
+
+impl Dependency {
+    #[must_use]
+    pub const fn new(
+        upstream_change_id: ChangeId,
+        upstream_revision_id: RevisionId,
+        downstream_change_id: ChangeId,
+    ) -> Self {
+        Self {
+            upstream_change: upstream_change_id,
+            upstream_revision: upstream_revision_id,
+            downstream_change: downstream_change_id,
+        }
+    }
+
+    #[must_use]
+    pub fn upstream_change_id(&self) -> &ChangeId {
+        &self.upstream_change
+    }
+
+    #[must_use]
+    pub fn upstream_revision_id(&self) -> &RevisionId {
+        &self.upstream_revision
+    }
+
+    #[must_use]
+    pub fn downstream_change_id(&self) -> &ChangeId {
+        &self.downstream_change
+    }
+}
+
+/// One ordered, exact Change revision in an immutable composition candidate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CandidateInput {
+    change_id: ChangeId,
+    revision_id: RevisionId,
+}
+
+impl CandidateInput {
+    #[must_use]
+    pub const fn new(change_id: ChangeId, revision_id: RevisionId) -> Self {
+        Self {
+            change_id,
+            revision_id,
+        }
+    }
+
+    #[must_use]
+    pub fn change_id(&self) -> &ChangeId {
+        &self.change_id
+    }
+
+    #[must_use]
+    pub fn revision_id(&self) -> &RevisionId {
+        &self.revision_id
+    }
+}
+
+/// A durable snapshot of ordered revisions and their dependency pins.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompositionCandidate {
+    candidate_id: CandidateId,
+    target_base: BaseState,
+    inputs: Vec<CandidateInput>,
+    resolved_dependencies: Vec<Dependency>,
+    content_digest: String,
+}
+
+impl CompositionCandidate {
+    #[must_use]
+    pub fn candidate_id(&self) -> &CandidateId {
+        &self.candidate_id
+    }
+
+    #[must_use]
+    pub fn target_base(&self) -> &BaseState {
+        &self.target_base
+    }
+
+    #[must_use]
+    pub fn inputs(&self) -> &[CandidateInput] {
+        &self.inputs
+    }
+
+    #[must_use]
+    pub fn resolved_dependencies(&self) -> &[Dependency] {
+        &self.resolved_dependencies
+    }
+
+    #[must_use]
+    pub fn content_digest(&self) -> &str {
+        &self.content_digest
+    }
+}
+
 impl AuditEvent {
     #[must_use]
     pub const fn event_id(&self) -> i64 {
@@ -272,6 +532,51 @@ impl SqliteRepository {
                  change_id TEXT NOT NULL REFERENCES changes(change_id) ON DELETE RESTRICT,
                  kind TEXT NOT NULL,
                  detail TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS dependencies (
+                 upstream_change_id TEXT NOT NULL REFERENCES changes(change_id) ON DELETE RESTRICT,
+                 upstream_revision_id TEXT NOT NULL REFERENCES revisions(revision_id) ON DELETE RESTRICT,
+                 downstream_change_id TEXT NOT NULL REFERENCES changes(change_id) ON DELETE RESTRICT,
+                 PRIMARY KEY(upstream_change_id, downstream_change_id),
+                 CHECK(upstream_change_id <> downstream_change_id)
+             );
+             CREATE TABLE IF NOT EXISTS candidates (
+                 candidate_id TEXT PRIMARY KEY NOT NULL,
+                 repository_id TEXT NOT NULL,
+                 target_base_object_id TEXT NOT NULL,
+                 content_digest TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS candidate_inputs (
+                 candidate_id TEXT NOT NULL REFERENCES candidates(candidate_id) ON DELETE RESTRICT,
+                 position INTEGER NOT NULL CHECK(position >= 0),
+                 change_id TEXT NOT NULL REFERENCES changes(change_id) ON DELETE RESTRICT,
+                 revision_id TEXT NOT NULL REFERENCES revisions(revision_id) ON DELETE RESTRICT,
+                 PRIMARY KEY(candidate_id, position),
+                 UNIQUE(candidate_id, change_id)
+             );
+             CREATE TABLE IF NOT EXISTS candidate_dependencies (
+                 candidate_id TEXT NOT NULL REFERENCES candidates(candidate_id) ON DELETE RESTRICT,
+                 upstream_change_id TEXT NOT NULL REFERENCES changes(change_id) ON DELETE RESTRICT,
+                 upstream_revision_id TEXT NOT NULL REFERENCES revisions(revision_id) ON DELETE RESTRICT,
+                 downstream_change_id TEXT NOT NULL REFERENCES changes(change_id) ON DELETE RESTRICT,
+                 PRIMARY KEY(candidate_id, upstream_change_id, downstream_change_id)
+             );
+             CREATE TABLE IF NOT EXISTS assignments (
+                 assignment_id TEXT PRIMARY KEY NOT NULL,
+                 change_id TEXT NOT NULL REFERENCES changes(change_id) ON DELETE RESTRICT,
+                 subject TEXT NOT NULL,
+                 role TEXT NOT NULL,
+                 actor TEXT NOT NULL,
+                 assigned_at_unix_ms INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS materializations (
+                 materialization_id TEXT PRIMARY KEY NOT NULL,
+                 revision_id TEXT NOT NULL REFERENCES revisions(revision_id) ON DELETE RESTRICT,
+                 workspace_id TEXT NOT NULL,
+                 provider TEXT NOT NULL,
+                 provider_ref TEXT NOT NULL,
+                 state TEXT NOT NULL,
+                 version INTEGER NOT NULL
              );",
         )?;
         let stored_version: Option<i64> =
@@ -533,6 +838,444 @@ impl SqliteRepository {
             .ok_or_else(|| StorageError::MissingRevision(revision_id.clone()))?;
         self.content_store.read_artifact(&digest)
     }
+
+    /// Adds a durable exact-revision dependency after atomically rejecting a cycle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an endpoint or pinned revision is missing, the pin does
+    /// not belong to its declared upstream Change, the edge already exists, or it
+    /// would create a dependency cycle.
+    pub fn add_dependency(&mut self, dependency: &Dependency) -> Result<(), StorageError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_change_exists(&transaction, dependency.upstream_change_id())?;
+        ensure_change_exists(&transaction, dependency.downstream_change_id())?;
+        let revision_change: String = transaction
+            .query_row(
+                "SELECT change_id FROM revisions WHERE revision_id = ?1",
+                [dependency.upstream_revision_id().as_str()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| {
+                StorageError::MissingRevision(dependency.upstream_revision_id().clone())
+            })?;
+        if revision_change != dependency.upstream_change_id().as_str() {
+            return Err(StorageError::RevisionDoesNotBelongToChange {
+                revision_id: dependency.upstream_revision_id().clone(),
+                change_id: dependency.upstream_change_id().clone(),
+            });
+        }
+        let creates_cycle: bool = transaction.query_row(
+            "WITH RECURSIVE reachable(change_id) AS (
+                 SELECT downstream_change_id FROM dependencies WHERE upstream_change_id = ?1
+                 UNION
+                 SELECT dependencies.downstream_change_id
+                 FROM dependencies JOIN reachable ON dependencies.upstream_change_id = reachable.change_id
+             )
+             SELECT EXISTS(SELECT 1 FROM reachable WHERE change_id = ?2)",
+            params![dependency.downstream_change_id().as_str(), dependency.upstream_change_id().as_str()],
+            |row| row.get(0),
+        )?;
+        if creates_cycle {
+            return Err(StorageError::DependencyCycle);
+        }
+        let changed = transaction.execute(
+            "INSERT OR IGNORE INTO dependencies(
+                upstream_change_id, upstream_revision_id, downstream_change_id
+             ) VALUES (?1, ?2, ?3)",
+            params![
+                dependency.upstream_change_id().as_str(),
+                dependency.upstream_revision_id().as_str(),
+                dependency.downstream_change_id().as_str(),
+            ],
+        )?;
+        if changed == 0 {
+            return Err(StorageError::DuplicateDependency);
+        }
+        transaction.execute(
+            "INSERT INTO audit_events(change_id, kind, detail) VALUES (?1, ?2, ?3)",
+            params![
+                dependency.downstream_change_id().as_str(),
+                "dependency-added",
+                format!(
+                    "{}@{}",
+                    dependency.upstream_change_id().as_str(),
+                    dependency.upstream_revision_id().as_str()
+                ),
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Returns the current exact dependency contracts for one downstream Change.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the Change is missing or persisted identifiers are invalid.
+    pub fn dependencies_for(
+        &self,
+        downstream_change_id: &ChangeId,
+    ) -> Result<Vec<Dependency>, StorageError> {
+        self.load_change(downstream_change_id)?;
+        let mut statement = self.connection.prepare(
+            "SELECT upstream_change_id, upstream_revision_id FROM dependencies
+             WHERE downstream_change_id = ?1 ORDER BY upstream_change_id",
+        )?;
+        let rows = statement.query_map([downstream_change_id.as_str()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.map(|row| {
+            let (change, revision) = row?;
+            Ok(Dependency::new(
+                ChangeId::new(change).map_err(StorageError::Domain)?,
+                RevisionId::new(revision).map_err(StorageError::Domain)?,
+                downstream_change_id.clone(),
+            ))
+        })
+        .collect()
+    }
+
+    /// Creates an immutable candidate from ordered exact revision inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for duplicate/empty inputs, mismatched repository or
+    /// revision ownership, unresolved dependency pins, or duplicate candidate ID.
+    pub fn create_candidate(
+        &mut self,
+        candidate_id: CandidateId,
+        target_base: BaseState,
+        inputs: Vec<CandidateInput>,
+    ) -> Result<CompositionCandidate, StorageError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let resolved_dependencies = validate_candidate_inputs(&transaction, &target_base, &inputs)?;
+        let content_digest = candidate_digest(&target_base, &inputs, &resolved_dependencies);
+        let inserted_candidate = transaction.execute(
+            "INSERT OR IGNORE INTO candidates(
+                candidate_id, repository_id, target_base_object_id, content_digest
+             ) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                candidate_id.as_str(),
+                target_base.repository_id().as_str(),
+                target_base.object_id(),
+                content_digest,
+            ],
+        )?;
+        if inserted_candidate == 0 {
+            return Err(StorageError::DuplicateCandidate(candidate_id));
+        }
+        for (position, input) in inputs.iter().enumerate() {
+            transaction.execute(
+                "INSERT INTO candidate_inputs(candidate_id, position, change_id, revision_id)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    candidate_id.as_str(),
+                    position,
+                    input.change_id().as_str(),
+                    input.revision_id().as_str()
+                ],
+            )?;
+            transaction.execute(
+                "INSERT INTO audit_events(change_id, kind, detail) VALUES (?1, ?2, ?3)",
+                params![
+                    input.change_id().as_str(),
+                    "candidate-created",
+                    candidate_id.as_str()
+                ],
+            )?;
+        }
+        for dependency in &resolved_dependencies {
+            transaction.execute(
+                "INSERT INTO candidate_dependencies(
+                    candidate_id, upstream_change_id, upstream_revision_id, downstream_change_id
+                 ) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    candidate_id.as_str(),
+                    dependency.upstream_change_id().as_str(),
+                    dependency.upstream_revision_id().as_str(),
+                    dependency.downstream_change_id().as_str(),
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(CompositionCandidate {
+            candidate_id,
+            target_base,
+            inputs,
+            resolved_dependencies,
+            content_digest,
+        })
+    }
+
+    /// Loads a candidate's immutable snapshot. It never resolves current heads.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a missing or malformed persisted candidate.
+    pub fn load_candidate(
+        &self,
+        candidate_id: &CandidateId,
+    ) -> Result<CompositionCandidate, StorageError> {
+        let (repository_id, object_id, content_digest): (String, String, String) = self
+            .connection
+            .query_row(
+                "SELECT repository_id, target_base_object_id, content_digest
+                 FROM candidates WHERE candidate_id = ?1",
+                [candidate_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::MissingCandidate(candidate_id.clone()))?;
+        let target_base = BaseState::new(RepositoryId::new(repository_id)?, object_id)?;
+        let inputs = candidate_inputs(&self.connection, candidate_id)?;
+        let dependencies = candidate_dependencies(&self.connection, candidate_id)?;
+        if candidate_digest(&target_base, &inputs, &dependencies) != content_digest {
+            return Err(StorageError::Invariant("candidate content digest mismatch"));
+        }
+        Ok(CompositionCandidate {
+            candidate_id: candidate_id.clone(),
+            target_base,
+            inputs,
+            resolved_dependencies: dependencies,
+            content_digest,
+        })
+    }
+
+    /// Reports whether any candidate input or dependency pin has advanced.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a missing or corrupt candidate.
+    pub fn candidate_is_stale(&self, candidate_id: &CandidateId) -> Result<bool, StorageError> {
+        let candidate = self.load_candidate(candidate_id)?;
+        for input in candidate.inputs() {
+            let head = self.load_change(input.change_id())?.head().cloned();
+            if head.as_ref() != Some(input.revision_id()) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Records an immutable assignment event for an existing Change.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a missing Change, duplicate assignment identity, or storage failure.
+    pub fn record_assignment(&mut self, assignment: &Assignment) -> Result<(), StorageError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_change_exists(&transaction, assignment.change_id())?;
+        let inserted = transaction.execute(
+            "INSERT OR IGNORE INTO assignments(
+                assignment_id, change_id, subject, role, actor, assigned_at_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                assignment.assignment_id().as_str(),
+                assignment.change_id().as_str(),
+                assignment.subject(),
+                assignment.role(),
+                assignment.actor(),
+                assignment.assigned_at_unix_ms(),
+            ],
+        )?;
+        if inserted == 0 {
+            return Err(StorageError::DuplicateAssignment(
+                assignment.assignment_id().clone(),
+            ));
+        }
+        transaction.execute(
+            "INSERT INTO audit_events(change_id, kind, detail) VALUES (?1, ?2, ?3)",
+            params![
+                assignment.change_id().as_str(),
+                "assignment-recorded",
+                assignment.assignment_id().as_str()
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Returns assignment history in its durable event order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a missing Change or malformed persisted assignment.
+    pub fn assignments_for(&self, change_id: &ChangeId) -> Result<Vec<Assignment>, StorageError> {
+        self.load_change(change_id)?;
+        let mut statement = self.connection.prepare(
+            "SELECT assignment_id, subject, role, actor, assigned_at_unix_ms FROM assignments
+             WHERE change_id = ?1 ORDER BY assigned_at_unix_ms, assignment_id",
+        )?;
+        let rows = statement.query_map([change_id.as_str()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (id, subject, role, actor, timestamp) = row?;
+            Assignment::new(
+                AssignmentId::new(id)?,
+                change_id.clone(),
+                subject,
+                role,
+                actor,
+                timestamp,
+            )
+        })
+        .collect()
+    }
+
+    /// Creates a clean materialization for one exact revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the revision is absent, identity is duplicated, or provider metadata is invalid.
+    pub fn create_materialization(
+        &mut self,
+        materialization_id: MaterializationId,
+        revision_id: RevisionId,
+        workspace_id: WorkspaceId,
+        provider: impl Into<String>,
+        provider_ref: impl Into<String>,
+    ) -> Result<Materialization, StorageError> {
+        let provider = valid_event_value(provider.into(), "provider")?;
+        let provider_ref = valid_event_value(provider_ref.into(), "provider reference")?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let change_id: String = transaction
+            .query_row(
+                "SELECT change_id FROM revisions WHERE revision_id = ?1",
+                [revision_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::MissingRevision(revision_id.clone()))?;
+        let inserted = transaction.execute(
+            "INSERT OR IGNORE INTO materializations(
+                materialization_id, revision_id, workspace_id, provider, provider_ref, state, version
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'clean', 0)",
+            params![materialization_id.as_str(), revision_id.as_str(), workspace_id.as_str(), provider, provider_ref],
+        )?;
+        if inserted == 0 {
+            return Err(StorageError::DuplicateMaterialization(materialization_id));
+        }
+        transaction.execute(
+            "INSERT INTO audit_events(change_id, kind, detail) VALUES (?1, ?2, ?3)",
+            params![
+                change_id,
+                "materialization-created",
+                materialization_id.as_str()
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(Materialization {
+            id: materialization_id,
+            revision_id,
+            workspace_id,
+            provider,
+            provider_ref,
+            state: MaterializationState::Clean,
+        })
+    }
+
+    /// Loads a materialization without consulting provider state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a missing or malformed persisted materialization.
+    pub fn load_materialization(
+        &self,
+        materialization_id: &MaterializationId,
+    ) -> Result<Materialization, StorageError> {
+        let row: Option<(String, String, String, String, String)> = self.connection.query_row(
+            "SELECT revision_id, workspace_id, provider, provider_ref, state FROM materializations WHERE materialization_id = ?1",
+            [materialization_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        ).optional()?;
+        let (revision_id, workspace_id, provider, provider_ref, state) =
+            row.ok_or_else(|| StorageError::MissingMaterialization(materialization_id.clone()))?;
+        Ok(Materialization {
+            id: materialization_id.clone(),
+            revision_id: RevisionId::new(revision_id)?,
+            workspace_id: WorkspaceId::new(workspace_id)?,
+            provider,
+            provider_ref,
+            state: MaterializationState::parse(&state)?,
+        })
+    }
+
+    /// Transitions a materialization only from the caller's expected state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stale-state error rather than overwriting concurrent provider observations.
+    pub fn transition_materialization(
+        &mut self,
+        materialization_id: &MaterializationId,
+        expected: MaterializationState,
+        next: MaterializationState,
+    ) -> Result<Materialization, StorageError> {
+        if !expected.may_transition_to(next) {
+            return Err(StorageError::InvalidMaterializationTransition { expected, next });
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let row: Option<(String, String, String, String, String)> = transaction.query_row(
+            "SELECT revision_id, workspace_id, provider, provider_ref, state FROM materializations WHERE materialization_id = ?1",
+            [materialization_id.as_str()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        ).optional()?;
+        let (revision, workspace, provider, provider_ref, actual) =
+            row.ok_or_else(|| StorageError::MissingMaterialization(materialization_id.clone()))?;
+        let actual = MaterializationState::parse(&actual)?;
+        if actual != expected {
+            return Err(StorageError::StaleMaterializationState { expected, actual });
+        }
+        let updated = transaction.execute(
+            "UPDATE materializations SET state = ?1, version = version + 1 WHERE materialization_id = ?2 AND state = ?3",
+            params![next.as_str(), materialization_id.as_str(), expected.as_str()],
+        )?;
+        if updated != 1 {
+            return Err(StorageError::Invariant(
+                "materialization changed during immediate transaction",
+            ));
+        }
+        let change_id: String = transaction.query_row(
+            "SELECT change_id FROM revisions WHERE revision_id = ?1",
+            [revision.as_str()],
+            |row| row.get(0),
+        )?;
+        transaction.execute(
+            "INSERT INTO audit_events(change_id, kind, detail) VALUES (?1, ?2, ?3)",
+            params![
+                change_id,
+                "materialization-transitioned",
+                format!("{}:{}", materialization_id.as_str(), next.as_str())
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(Materialization {
+            id: materialization_id.clone(),
+            revision_id: RevisionId::new(revision)?,
+            workspace_id: WorkspaceId::new(workspace)?,
+            provider,
+            provider_ref,
+            state: next,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -545,8 +1288,35 @@ pub enum StorageError {
     DigestMismatch(String),
     DuplicateChange(ChangeId),
     DuplicateRevision(RevisionId),
+    DuplicateCandidate(CandidateId),
+    DuplicateAssignment(AssignmentId),
+    DuplicateMaterialization(MaterializationId),
+    DuplicateCandidateInput(ChangeId),
+    DuplicateDependency,
     MissingChange(ChangeId),
     MissingRevision(RevisionId),
+    MissingCandidate(CandidateId),
+    MissingMaterialization(MaterializationId),
+    EmptyCandidate,
+    RevisionDoesNotBelongToChange {
+        revision_id: RevisionId,
+        change_id: ChangeId,
+    },
+    CandidateRepositoryMismatch {
+        revision_id: RevisionId,
+        expected: RepositoryId,
+    },
+    UnresolvedDependency(Dependency),
+    CandidateDependencyOrder(Dependency),
+    InvalidMaterializationTransition {
+        expected: MaterializationState,
+        next: MaterializationState,
+    },
+    StaleMaterializationState {
+        expected: MaterializationState,
+        actual: MaterializationState,
+    },
+    DependencyCycle,
     UnsupportedSchemaVersion(i64),
     InvalidLeaseValue(&'static str),
     InvalidLeaseExpiry,
@@ -573,8 +1343,74 @@ impl Display for StorageError {
             Self::DigestMismatch(digest) => write!(formatter, "content digest mismatch: {digest}"),
             Self::DuplicateChange(id) => write!(formatter, "duplicate change: {}", id.as_str()),
             Self::DuplicateRevision(id) => write!(formatter, "duplicate revision: {}", id.as_str()),
+            Self::DuplicateCandidate(id) => {
+                write!(formatter, "duplicate candidate: {}", id.as_str())
+            }
+            Self::DuplicateAssignment(id) => {
+                write!(formatter, "duplicate assignment: {}", id.as_str())
+            }
+            Self::DuplicateMaterialization(id) => {
+                write!(formatter, "duplicate materialization: {}", id.as_str())
+            }
+            Self::DuplicateCandidateInput(id) => {
+                write!(
+                    formatter,
+                    "duplicate candidate input change: {}",
+                    id.as_str()
+                )
+            }
+            Self::DuplicateDependency => formatter.write_str("duplicate dependency"),
             Self::MissingChange(id) => write!(formatter, "missing change: {}", id.as_str()),
             Self::MissingRevision(id) => write!(formatter, "missing revision: {}", id.as_str()),
+            Self::MissingCandidate(id) => write!(formatter, "missing candidate: {}", id.as_str()),
+            Self::MissingMaterialization(id) => {
+                write!(formatter, "missing materialization: {}", id.as_str())
+            }
+            Self::EmptyCandidate => formatter.write_str("candidate requires at least one input"),
+            Self::RevisionDoesNotBelongToChange {
+                revision_id,
+                change_id,
+            } => write!(
+                formatter,
+                "revision {} does not belong to change {}",
+                revision_id.as_str(),
+                change_id.as_str()
+            ),
+            Self::CandidateRepositoryMismatch {
+                revision_id,
+                expected,
+            } => write!(
+                formatter,
+                "revision {} is not in candidate repository {}",
+                revision_id.as_str(),
+                expected.as_str()
+            ),
+            Self::UnresolvedDependency(dependency) => write!(
+                formatter,
+                "candidate lacks required dependency {}@{} for {}",
+                dependency.upstream_change_id().as_str(),
+                dependency.upstream_revision_id().as_str(),
+                dependency.downstream_change_id().as_str()
+            ),
+            Self::CandidateDependencyOrder(dependency) => write!(
+                formatter,
+                "candidate orders dependent {} before required upstream {}",
+                dependency.downstream_change_id().as_str(),
+                dependency.upstream_change_id().as_str()
+            ),
+            Self::InvalidMaterializationTransition { expected, next } => write!(
+                formatter,
+                "invalid materialization transition from {} to {}",
+                expected.as_str(),
+                next.as_str()
+            ),
+            Self::StaleMaterializationState { expected, actual } => write!(
+                formatter,
+                "stale materialization state: expected {}, actual {}",
+                expected.as_str(),
+                actual.as_str()
+            ),
+            Self::DependencyCycle => formatter.write_str("dependency would create a cycle"),
             Self::UnsupportedSchemaVersion(version) => write!(
                 formatter,
                 "database schema version {version} is newer than this Weft build"
@@ -613,7 +1449,213 @@ impl From<rusqlite::Error> for StorageError {
     }
 }
 
+impl From<ChangeError> for StorageError {
+    fn from(error: ChangeError) -> Self {
+        Self::Domain(error)
+    }
+}
+
+fn ensure_change_exists(
+    transaction: &rusqlite::Transaction<'_>,
+    change_id: &ChangeId,
+) -> Result<(), StorageError> {
+    let exists = transaction
+        .query_row(
+            "SELECT 1 FROM changes WHERE change_id = ?1",
+            [change_id.as_str()],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if exists {
+        Ok(())
+    } else {
+        Err(StorageError::MissingChange(change_id.clone()))
+    }
+}
+
+fn dependencies_for_inputs(
+    transaction: &rusqlite::Transaction<'_>,
+    inputs: &[CandidateInput],
+) -> Result<Vec<Dependency>, StorageError> {
+    let mut dependencies = Vec::new();
+    for input in inputs {
+        let mut statement = transaction.prepare(
+            "SELECT upstream_change_id, upstream_revision_id FROM dependencies
+             WHERE downstream_change_id = ?1 ORDER BY upstream_change_id",
+        )?;
+        let rows = statement.query_map([input.change_id().as_str()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (upstream_change, upstream_revision) = row?;
+            dependencies.push(Dependency::new(
+                ChangeId::new(upstream_change)?,
+                RevisionId::new(upstream_revision)?,
+                input.change_id().clone(),
+            ));
+        }
+    }
+    Ok(dependencies)
+}
+
+fn validate_candidate_inputs(
+    transaction: &rusqlite::Transaction<'_>,
+    target_base: &BaseState,
+    inputs: &[CandidateInput],
+) -> Result<Vec<Dependency>, StorageError> {
+    if inputs.is_empty() {
+        return Err(StorageError::EmptyCandidate);
+    }
+    let mut candidate_changes = HashSet::new();
+    for input in inputs {
+        if !candidate_changes.insert(input.change_id().as_str()) {
+            return Err(StorageError::DuplicateCandidateInput(
+                input.change_id().clone(),
+            ));
+        }
+        let row: Option<(String, String)> = transaction
+            .query_row(
+                "SELECT change_id, repository_id FROM revisions WHERE revision_id = ?1",
+                [input.revision_id().as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let (revision_change, repository_id) =
+            row.ok_or_else(|| StorageError::MissingRevision(input.revision_id().clone()))?;
+        if revision_change != input.change_id().as_str() {
+            return Err(StorageError::RevisionDoesNotBelongToChange {
+                revision_id: input.revision_id().clone(),
+                change_id: input.change_id().clone(),
+            });
+        }
+        if repository_id != target_base.repository_id().as_str() {
+            return Err(StorageError::CandidateRepositoryMismatch {
+                revision_id: input.revision_id().clone(),
+                expected: target_base.repository_id().clone(),
+            });
+        }
+    }
+    let dependencies = dependencies_for_inputs(transaction, inputs)?;
+    let positions: HashMap<_, _> = inputs
+        .iter()
+        .enumerate()
+        .map(|(position, input)| (input.change_id(), position))
+        .collect();
+    for dependency in &dependencies {
+        let Some(&upstream) = positions.get(dependency.upstream_change_id()) else {
+            return Err(StorageError::UnresolvedDependency(dependency.clone()));
+        };
+        let Some(&downstream) = positions.get(dependency.downstream_change_id()) else {
+            return Err(StorageError::UnresolvedDependency(dependency.clone()));
+        };
+        if inputs[upstream].revision_id() != dependency.upstream_revision_id() {
+            return Err(StorageError::UnresolvedDependency(dependency.clone()));
+        }
+        if upstream >= downstream {
+            return Err(StorageError::CandidateDependencyOrder(dependency.clone()));
+        }
+    }
+    Ok(dependencies)
+}
+
+fn candidate_inputs(
+    connection: &Connection,
+    candidate_id: &CandidateId,
+) -> Result<Vec<CandidateInput>, StorageError> {
+    let mut statement = connection.prepare(
+        "SELECT change_id, revision_id FROM candidate_inputs
+         WHERE candidate_id = ?1 ORDER BY position",
+    )?;
+    let rows = statement.query_map([candidate_id.as_str()], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    rows.map(|row| {
+        let (change, revision) = row?;
+        Ok(CandidateInput::new(
+            ChangeId::new(change)?,
+            RevisionId::new(revision)?,
+        ))
+    })
+    .collect()
+}
+
+fn candidate_dependencies(
+    connection: &Connection,
+    candidate_id: &CandidateId,
+) -> Result<Vec<Dependency>, StorageError> {
+    let mut statement = connection.prepare(
+        "SELECT upstream_change_id, upstream_revision_id, downstream_change_id
+         FROM candidate_dependencies WHERE candidate_id = ?1
+         ORDER BY downstream_change_id, upstream_change_id",
+    )?;
+    let rows = statement.query_map([candidate_id.as_str()], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    rows.map(|row| {
+        let (upstream_change, upstream_revision, downstream_change) = row?;
+        Ok(Dependency::new(
+            ChangeId::new(upstream_change)?,
+            RevisionId::new(upstream_revision)?,
+            ChangeId::new(downstream_change)?,
+        ))
+    })
+    .collect()
+}
+
+fn candidate_digest(
+    target_base: &BaseState,
+    inputs: &[CandidateInput],
+    dependencies: &[Dependency],
+) -> String {
+    let mut bytes = b"weft/composition-candidate-v1\0".to_vec();
+    write_candidate_string(&mut bytes, target_base.repository_id().as_str());
+    write_candidate_string(&mut bytes, target_base.object_id());
+    write_candidate_count(&mut bytes, inputs.len());
+    for input in inputs {
+        write_candidate_string(&mut bytes, input.change_id().as_str());
+        write_candidate_string(&mut bytes, input.revision_id().as_str());
+    }
+    let mut ordered_dependencies: Vec<_> = dependencies.iter().collect();
+    ordered_dependencies.sort_by(|left, right| {
+        (
+            left.downstream_change_id().as_str(),
+            left.upstream_change_id().as_str(),
+            left.upstream_revision_id().as_str(),
+        )
+            .cmp(&(
+                right.downstream_change_id().as_str(),
+                right.upstream_change_id().as_str(),
+                right.upstream_revision_id().as_str(),
+            ))
+    });
+    write_candidate_count(&mut bytes, ordered_dependencies.len());
+    for dependency in ordered_dependencies {
+        write_candidate_string(&mut bytes, dependency.upstream_change_id().as_str());
+        write_candidate_string(&mut bytes, dependency.upstream_revision_id().as_str());
+        write_candidate_string(&mut bytes, dependency.downstream_change_id().as_str());
+    }
+    sha256_digest(&bytes)
+}
+
+fn write_candidate_string(bytes: &mut Vec<u8>, value: &str) {
+    write_candidate_count(bytes, value.len());
+    bytes.extend_from_slice(value.as_bytes());
+}
+
+fn write_candidate_count(bytes: &mut Vec<u8>, value: usize) {
+    bytes.extend_from_slice(&(value as u64).to_be_bytes());
+}
+
 fn valid_lease_value(value: String, kind: &'static str) -> Result<String, StorageError> {
+    valid_event_value(value, kind)
+}
+
+fn valid_event_value(value: String, kind: &'static str) -> Result<String, StorageError> {
     if value.trim().is_empty() || value != value.trim() || value.chars().any(char::is_control) {
         return Err(StorageError::InvalidLeaseValue(kind));
     }
@@ -840,6 +1882,269 @@ mod tests {
                 .filter(|result| matches!(result, Err(StorageError::StaleHead { .. })))
                 .count(),
             1
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn persists_exact_dependency_candidate_and_marks_it_stale_after_an_advance() {
+        let root = temporary_directory();
+        let database = root.join("weft.sqlite");
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let artifact = artifact(&store);
+        let upstream = ChangeId::new("upstream").unwrap();
+        let downstream = ChangeId::new("downstream").unwrap();
+        let upstream_revision = RevisionId::new("upstream-r1").unwrap();
+        let downstream_revision = RevisionId::new("downstream-r1").unwrap();
+        let candidate_id = CandidateId::new("candidate-1").unwrap();
+        {
+            let mut repository = SqliteRepository::open(&database, store.clone()).unwrap();
+            repository.create_change(upstream.clone()).unwrap();
+            repository.create_change(downstream.clone()).unwrap();
+            repository
+                .append_revision(&upstream, None, upstream_revision.clone(), &artifact)
+                .unwrap();
+            repository
+                .append_revision(&downstream, None, downstream_revision.clone(), &artifact)
+                .unwrap();
+            repository
+                .add_dependency(&Dependency::new(
+                    upstream.clone(),
+                    upstream_revision.clone(),
+                    downstream.clone(),
+                ))
+                .unwrap();
+            let candidate = repository
+                .create_candidate(
+                    candidate_id.clone(),
+                    artifact.base().clone(),
+                    vec![
+                        CandidateInput::new(upstream.clone(), upstream_revision.clone()),
+                        CandidateInput::new(downstream.clone(), downstream_revision.clone()),
+                    ],
+                )
+                .unwrap();
+            assert_eq!(candidate.resolved_dependencies().len(), 1);
+            assert!(!repository.candidate_is_stale(&candidate_id).unwrap());
+        }
+        let mut repository = SqliteRepository::open(&database, store).unwrap();
+        let persisted = repository.load_candidate(&candidate_id).unwrap();
+        assert_eq!(persisted.inputs()[0].revision_id(), &upstream_revision);
+        assert_eq!(persisted.inputs()[1].revision_id(), &downstream_revision);
+        repository
+            .append_revision(
+                &upstream,
+                Some(&upstream_revision),
+                RevisionId::new("upstream-r2").unwrap(),
+                &artifact,
+            )
+            .unwrap();
+        assert!(repository.candidate_is_stale(&candidate_id).unwrap());
+        assert_eq!(
+            repository.load_candidate(&candidate_id).unwrap().inputs()[0].revision_id(),
+            &upstream_revision
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_dependency_cycles_and_candidates_without_exact_pins() {
+        let root = temporary_directory();
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let artifact = artifact(&store);
+        let mut repository = SqliteRepository::open(root.join("weft.sqlite"), store).unwrap();
+        let changes: Vec<_> = ["a", "b", "c"]
+            .into_iter()
+            .map(|id| ChangeId::new(id).unwrap())
+            .collect();
+        let revisions: Vec<_> = ["a-r1", "b-r1", "c-r1"]
+            .into_iter()
+            .map(|id| RevisionId::new(id).unwrap())
+            .collect();
+        for (change, revision) in changes.iter().zip(&revisions) {
+            repository.create_change(change.clone()).unwrap();
+            repository
+                .append_revision(change, None, revision.clone(), &artifact)
+                .unwrap();
+        }
+        repository
+            .add_dependency(&Dependency::new(
+                changes[0].clone(),
+                revisions[0].clone(),
+                changes[1].clone(),
+            ))
+            .unwrap();
+        repository
+            .add_dependency(&Dependency::new(
+                changes[1].clone(),
+                revisions[1].clone(),
+                changes[2].clone(),
+            ))
+            .unwrap();
+        assert!(matches!(
+            repository.add_dependency(&Dependency::new(
+                changes[2].clone(),
+                revisions[2].clone(),
+                changes[0].clone(),
+            )),
+            Err(StorageError::DependencyCycle)
+        ));
+        assert!(matches!(
+            repository.create_candidate(
+                CandidateId::new("candidate-missing-pin").unwrap(),
+                artifact.base().clone(),
+                vec![CandidateInput::new(
+                    changes[1].clone(),
+                    revisions[1].clone()
+                )],
+            ),
+            Err(StorageError::UnresolvedDependency(_))
+        ));
+        assert!(matches!(
+            repository.create_candidate(
+                CandidateId::new("candidate-wrong-order").unwrap(),
+                artifact.base().clone(),
+                vec![
+                    CandidateInput::new(changes[1].clone(), revisions[1].clone()),
+                    CandidateInput::new(changes[0].clone(), revisions[0].clone()),
+                ],
+            ),
+            Err(StorageError::CandidateDependencyOrder(_))
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn candidate_order_is_immutable_and_changes_its_digest() {
+        let root = temporary_directory();
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let artifact = artifact(&store);
+        let mut repository = SqliteRepository::open(root.join("weft.sqlite"), store).unwrap();
+        let first_change = ChangeId::new("first").unwrap();
+        let second_change = ChangeId::new("second").unwrap();
+        let first_revision = RevisionId::new("first-r1").unwrap();
+        let second_revision = RevisionId::new("second-r1").unwrap();
+        for (change, revision) in [
+            (&first_change, &first_revision),
+            (&second_change, &second_revision),
+        ] {
+            repository.create_change(change.clone()).unwrap();
+            repository
+                .append_revision(change, None, revision.clone(), &artifact)
+                .unwrap();
+        }
+        let forward = repository
+            .create_candidate(
+                CandidateId::new("candidate-forward").unwrap(),
+                artifact.base().clone(),
+                vec![
+                    CandidateInput::new(first_change.clone(), first_revision.clone()),
+                    CandidateInput::new(second_change.clone(), second_revision.clone()),
+                ],
+            )
+            .unwrap();
+        let reverse = repository
+            .create_candidate(
+                CandidateId::new("candidate-reverse").unwrap(),
+                artifact.base().clone(),
+                vec![
+                    CandidateInput::new(second_change, second_revision),
+                    CandidateInput::new(first_change, first_revision),
+                ],
+            )
+            .unwrap();
+        assert_ne!(forward.content_digest(), reverse.content_digest());
+        assert_eq!(
+            forward.inputs(),
+            repository
+                .load_candidate(forward.candidate_id())
+                .unwrap()
+                .inputs()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn persists_assignment_history_and_guards_materialization_transitions() {
+        let root = temporary_directory();
+        let database = root.join("weft.sqlite");
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let artifact = artifact(&store);
+        let change = ChangeId::new("change-1").unwrap();
+        let revision = RevisionId::new("revision-1").unwrap();
+        let materialization = MaterializationId::new("materialization-1").unwrap();
+        {
+            let mut repository = SqliteRepository::open(&database, store.clone()).unwrap();
+            repository.create_change(change.clone()).unwrap();
+            repository
+                .append_revision(&change, None, revision.clone(), &artifact)
+                .unwrap();
+            let assignment = Assignment::new(
+                AssignmentId::new("assignment-1").unwrap(),
+                change.clone(),
+                "agent-1",
+                "implementer",
+                "operator",
+                100,
+            )
+            .unwrap();
+            repository.record_assignment(&assignment).unwrap();
+            assert_eq!(
+                repository.assignments_for(&change).unwrap(),
+                vec![assignment]
+            );
+            assert_eq!(
+                repository
+                    .create_materialization(
+                        materialization.clone(),
+                        revision.clone(),
+                        WorkspaceId::new("workspace-1").unwrap(),
+                        "native-git",
+                        "worktree:one",
+                    )
+                    .unwrap()
+                    .state(),
+                MaterializationState::Clean
+            );
+            assert!(matches!(
+                repository.transition_materialization(
+                    &materialization,
+                    MaterializationState::Clean,
+                    MaterializationState::Clean,
+                ),
+                Err(StorageError::InvalidMaterializationTransition { .. })
+            ));
+            assert_eq!(
+                repository
+                    .transition_materialization(
+                        &materialization,
+                        MaterializationState::Clean,
+                        MaterializationState::Dirty,
+                    )
+                    .unwrap()
+                    .state(),
+                MaterializationState::Dirty
+            );
+            assert!(matches!(
+                repository.transition_materialization(
+                    &materialization,
+                    MaterializationState::Clean,
+                    MaterializationState::Released,
+                ),
+                Err(StorageError::StaleMaterializationState { .. })
+            ));
+        }
+        let repository = SqliteRepository::open(&database, store).unwrap();
+        assert_eq!(
+            repository.assignments_for(&change).unwrap()[0].role(),
+            "implementer"
+        );
+        assert_eq!(
+            repository
+                .load_materialization(&materialization)
+                .unwrap()
+                .state(),
+            MaterializationState::Dirty
         );
         fs::remove_dir_all(root).unwrap();
     }

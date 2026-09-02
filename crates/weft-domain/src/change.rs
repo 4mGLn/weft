@@ -41,6 +41,10 @@ macro_rules! domain_id {
 domain_id!(RepositoryId);
 domain_id!(ChangeId);
 domain_id!(RevisionId);
+domain_id!(CandidateId);
+domain_id!(AssignmentId);
+domain_id!(MaterializationId);
+domain_id!(WorkspaceId);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BaseState {

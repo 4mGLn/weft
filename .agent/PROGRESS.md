@@ -24,11 +24,16 @@ Phase 1 — Persistence and domain kernel.
   behavior; all fifteen focused tests and the strict workspace gate pass.
 - Added SQLite-backed exclusive leases with expiry recovery and ordered audit
   events for Change creation, revision appends, and lease acquisition.
+- Added durable exact-revision dependencies with atomic cycle rejection and
+  immutable CompositionCandidates with ordered inputs, dependency snapshots,
+  deterministic digests, restart reload, and explicit stale detection.
+- Added durable assignment-event history and exact-revision materialization
+  records with guarded, auditable lifecycle transitions.
 
 ## Next checkpoint
 
-Extend the transactional repository to relationships and immutable
-CompositionCandidates.
+Extend the transactional repository to exact review/validation targets, then
+operation-idempotency and integration attempt/receipt records.
 
 ## Known gaps
 
