@@ -9,15 +9,15 @@ This is the canonical project context for coding agents. Keep it concise and lin
 | Product thesis, boundaries, success | `docs/GOAL.md` |
 | Entities, invariants, lifecycle | `docs/DOMAIN.md` |
 | Phases and provider spike | `docs/ROADMAP.md` |
-| Working protocol | `docs/agent-harness/README.md` |
-| Agent process protocol | `docs/AGENT_PROTOCOL.md` |
-| Paseo integration | `docs/PASEO.md` |
-| Multi-agent workflows | `docs/MULTI_AGENT_WORKFLOWS.md` |
-| Task/checkpoint format | `docs/agent-harness/task-template.md` |
-| Required proof by change class | `docs/agent-harness/verification-matrix.md` |
-| Durable architecture decisions | `docs/decisions/` |
-| Current project evidence | `.agent/PROGRESS.md` |
-| Current decision ledger | `.agent/DECISIONS.md` |
+| Working protocol | `.agents/agent-harness/README.md` |
+| Agent process protocol | `.agents/AGENT_PROTOCOL.md` |
+| Paseo integration | `.agents/PASEO.md` |
+| Multi-agent workflows | `.agents/MULTI_AGENT_WORKFLOWS.md` |
+| Task/checkpoint format | `.agents/agent-harness/task-template.md` |
+| Required proof by change class | `.agents/agent-harness/verification-matrix.md` |
+| Durable architecture decisions | `.agents/decisions/` |
+| Current project evidence | `.agents/PROGRESS.md` |
+| Current decision ledger | `.agents/DECISIONS.md` |
 | Development commands | `docs/DEVELOPMENT.md` |
 | Release/deployment policy | `docs/DEPLOYMENT.md` |
 

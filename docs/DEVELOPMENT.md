@@ -8,7 +8,7 @@ Run all repository checks from the root:
 make check
 ```
 
-The current gate validates the agent harness, local Markdown links, Rust formatting, workspace tests, and Clippy warnings. Provider spikes remain explicit targets because the GitButler spike requires a local GitButler installation and registry access.
+The current gate validates repository documentation, Rust formatting, workspace tests, and Clippy warnings. Provider spikes remain explicit targets because the GitButler spike requires a local GitButler installation and registry access.
 
 ## Rust workspace
 
@@ -46,13 +46,6 @@ cargo run -p weft-cli -- --format json --state-dir /tmp/weft-state change create
 
 Mutations require caller-owned operation IDs, actors, timestamps, and relevant expected heads or versions. Terminal transitions require `--yes`; commands never prompt. Run `cargo run -p weft-cli -- --help` for lifecycle groups. Native Git commands reverify exact provider commits against durable canonical revisions before materialization or integration. Provider execution enters durable `reconciling` state on uncertain outcomes; use `native-git reconcile-integration`, never blind re-execution.
 
-The provider-neutral orchestration contract is documented in
-[`AGENT_PROTOCOL.md`](AGENT_PROTOCOL.md). Paseo launches and supervises agents
-and workspaces according to [`PASEO.md`](PASEO.md), while Weft remains the
-durable coordination authority. Multi-agent dependency, review, validation,
-resolution, and integration ordering is described in
-[`MULTI_AGENT_WORKFLOWS.md`](MULTI_AGENT_WORKFLOWS.md).
-
 ## Runtime archive
 
 The initial deployable boundary is the Ubuntu 24.04 x86_64 local CLI archive:
@@ -70,13 +63,11 @@ uninstalls the binary, and proves state retention. It does not publish anything.
 
 1. Define a measurable outcome and acceptance criteria.
 2. Classify the affected domain/provider/release boundary.
-3. Create a task record for material work.
+3. Record the scope, risks, and acceptance criteria.
 4. Inspect existing decisions and evidence.
 5. Implement one coherent behavior.
 6. Run focused proof, then the verification-matrix gates.
 7. Record decisions, results, residual risks, and unavailable environments.
-
-Use `.agent/PROGRESS.md` for current project checkpoints and `.agent/DECISIONS.md` as a concise index into durable ADRs. Put large temporary evidence under `.agent/references/`; archive completed working plans under `.agent/archive/`.
 
 ## Source-of-truth order
 

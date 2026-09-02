@@ -2,7 +2,7 @@
 
 ## Before changing the repository
 
-Read `docs/GOAL.md`, the relevant part of `docs/DOMAIN.md`, and `AGENTS.md`. Material work should create or update a task record from `docs/agent-harness/task-template.md`.
+Read `docs/GOAL.md`, the relevant part of `docs/DOMAIN.md`, and `AGENTS.md`.
 
 Discuss changes that alter domain invariants, provider semantics, persistence, compatibility, security, or deployment through an ADR before implementation.
 
