@@ -29,4 +29,4 @@ Paseo may stop or archive a session at any point. Resume uses the durable proced
 
 Register the repository with `paseo project create`. Prefer worktree isolation for mutating agents and local isolation for read-only review. Select a human-configured Paseo agent profile by its current notes rather than hard-coding a provider/model in the repository. Use completion notifications to trigger inspection; do not poll agents as a scheduler loop.
 
-Repository commands exposed to supervised terminals are the Make targets documented in [DEVELOPMENT.md](DEVELOPMENT.md). Secrets, GitHub tokens, signing keys, and provider credentials stay in the launcher/environment and must never enter Weft state, prompts, fixtures, or logs.
+Repository commands exposed to supervised terminals are the Make targets documented in [the development guide](../docs/DEVELOPMENT.md). Secrets, GitHub tokens, signing keys, and provider credentials stay in the launcher/environment and must never enter Weft state, prompts, fixtures, or logs.

@@ -32,7 +32,7 @@ Provider names, branches, commands, and successful happy paths do not prove iden
 ## Orchestrator boundary
 
 Agent runtimes use the provider-neutral process contract in
-[`docs/AGENT_PROTOCOL.md`](../AGENT_PROTOCOL.md). Orchestrators may launch,
+[`AGENT_PROTOCOL.md`](../AGENT_PROTOCOL.md). Orchestrators may launch,
 supervise, and notify, but durable work ownership and recovery always come from
 Weft state. Paseo-specific placement guidance lives in
-[`docs/PASEO.md`](../PASEO.md); it does not override the protocol.
+[`PASEO.md`](../PASEO.md); it does not override the protocol.

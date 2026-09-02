@@ -36,8 +36,6 @@ release asset is published.
 - [Implementation roadmap](docs/ROADMAP.md)
 - [Development guide](docs/DEVELOPMENT.md)
 - [Deployment and release policy](docs/DEPLOYMENT.md)
-- [Agent protocol](docs/AGENT_PROTOCOL.md)
-- [Paseo integration](docs/PASEO.md)
 - [Agent instructions](AGENTS.md)
 
 ## Development
@@ -56,7 +54,7 @@ cargo run -p weft-cli -- --help
 
 The domain kernel, canonical artifact store, SQLite store, provider adapters, and CLI are verified by `make check` and live under `crates/`.
 
-Material changes should start from the [task record template](docs/agent-harness/task-template.md), use the [verification matrix](docs/agent-harness/verification-matrix.md), and record durable design decisions under `docs/decisions/`.
+For contributor workflow and verification requirements, follow [AGENTS.md](AGENTS.md).
 
 ## Architecture at a glance
 
