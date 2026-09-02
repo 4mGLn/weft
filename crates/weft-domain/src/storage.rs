@@ -12,10 +12,11 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use crate::artifact::{PathOperation, is_sha256_digest, sha256_digest};
 use crate::{
     AssignmentId, BaseState, CandidateId, CanonicalArtifact, ChangeError, ChangeId,
-    MaterializationId, RepositoryId, RevisionId, WorkspaceId,
+    MaterializationId, RepositoryId, ReviewRequestId, ReviewSubmissionId, RevisionId,
+    ValidationResultId, WorkspaceId,
 };
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 static NEXT_TEMPORARY_OBJECT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
@@ -324,6 +325,175 @@ pub struct Materialization {
     state: MaterializationState,
 }
 
+/// An immutable exact target; mutable Change IDs are deliberately not targets.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Target {
+    Revision(RevisionId),
+    Candidate(CandidateId),
+}
+
+impl Target {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Revision(_) => "revision",
+            Self::Candidate(_) => "candidate",
+        }
+    }
+    fn id(&self) -> &str {
+        match self {
+            Self::Revision(id) => id.as_str(),
+            Self::Candidate(id) => id.as_str(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReviewOutcome {
+    Approved,
+    ChangesRequested,
+    Rejected,
+    Blocked,
+}
+impl ReviewOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Approved => "approved",
+            Self::ChangesRequested => "changes-requested",
+            Self::Rejected => "rejected",
+            Self::Blocked => "blocked",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewRequest {
+    id: ReviewRequestId,
+    target: Target,
+    requester: String,
+    reviewers: String,
+    created_at_unix_ms: i64,
+}
+impl ReviewRequest {
+    /// # Errors
+    /// Returns an error for invalid actor metadata.
+    pub fn new(
+        id: ReviewRequestId,
+        target: Target,
+        requester: impl Into<String>,
+        reviewers: impl Into<String>,
+        created_at_unix_ms: i64,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            id,
+            target,
+            requester: valid_event_value(requester.into(), "requester")?,
+            reviewers: valid_event_value(reviewers.into(), "reviewers")?,
+            created_at_unix_ms,
+        })
+    }
+    #[must_use]
+    pub fn id(&self) -> &ReviewRequestId {
+        &self.id
+    }
+    #[must_use]
+    pub fn target(&self) -> &Target {
+        &self.target
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewSubmission {
+    id: ReviewSubmissionId,
+    request_id: ReviewRequestId,
+    reviewer: String,
+    outcome: ReviewOutcome,
+    comments: String,
+    submitted_at_unix_ms: i64,
+}
+impl ReviewSubmission {
+    /// # Errors
+    /// Returns an error for invalid reviewer or comment metadata.
+    pub fn new(
+        id: ReviewSubmissionId,
+        request_id: ReviewRequestId,
+        reviewer: impl Into<String>,
+        outcome: ReviewOutcome,
+        comments: impl Into<String>,
+        submitted_at_unix_ms: i64,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            id,
+            request_id,
+            reviewer: valid_event_value(reviewer.into(), "reviewer")?,
+            outcome,
+            comments: valid_event_value(comments.into(), "comments")?,
+            submitted_at_unix_ms,
+        })
+    }
+    #[must_use]
+    pub fn outcome(&self) -> ReviewOutcome {
+        self.outcome
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ValidationStatus {
+    Passed,
+    Failed,
+    Blocked,
+}
+impl ValidationStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+            Self::Blocked => "blocked",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ValidationResult {
+    id: ValidationResultId,
+    target: Target,
+    kind: String,
+    environment: String,
+    status: ValidationStatus,
+    execution_id: String,
+    recorded_at_unix_ms: i64,
+}
+impl ValidationResult {
+    /// # Errors
+    /// Returns an error for invalid validation metadata.
+    pub fn new(
+        id: ValidationResultId,
+        target: Target,
+        kind: impl Into<String>,
+        environment: impl Into<String>,
+        status: ValidationStatus,
+        execution_id: impl Into<String>,
+        recorded_at_unix_ms: i64,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            id,
+            target,
+            kind: valid_event_value(kind.into(), "validation kind")?,
+            environment: valid_event_value(environment.into(), "environment")?,
+            status,
+            execution_id: valid_event_value(execution_id.into(), "execution id")?,
+            recorded_at_unix_ms,
+        })
+    }
+    #[must_use]
+    pub fn target(&self) -> &Target {
+        &self.target
+    }
+    #[must_use]
+    pub fn status(&self) -> ValidationStatus {
+        self.status
+    }
+}
+
 impl Materialization {
     #[must_use]
     pub fn materialization_id(&self) -> &MaterializationId {
@@ -496,6 +666,7 @@ impl SqliteRepository {
     /// # Errors
     ///
     /// Returns an error when `SQLite` cannot open, configure, or migrate the database.
+    #[allow(clippy::too_many_lines)]
     pub fn open(
         database_path: impl AsRef<Path>,
         content_store: ContentStore,
@@ -577,6 +748,32 @@ impl SqliteRepository {
                  provider_ref TEXT NOT NULL,
                  state TEXT NOT NULL,
                  version INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS review_requests (
+                 review_request_id TEXT PRIMARY KEY NOT NULL,
+                 target_kind TEXT NOT NULL,
+                 target_id TEXT NOT NULL,
+                 requester TEXT NOT NULL,
+                 reviewers TEXT NOT NULL,
+                 created_at_unix_ms INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS review_submissions (
+                 review_submission_id TEXT PRIMARY KEY NOT NULL,
+                 review_request_id TEXT NOT NULL REFERENCES review_requests(review_request_id) ON DELETE RESTRICT,
+                 reviewer TEXT NOT NULL,
+                 outcome TEXT NOT NULL,
+                 comments TEXT NOT NULL,
+                 submitted_at_unix_ms INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS validation_results (
+                 validation_result_id TEXT PRIMARY KEY NOT NULL,
+                 target_kind TEXT NOT NULL,
+                 target_id TEXT NOT NULL,
+                 kind TEXT NOT NULL,
+                 environment TEXT NOT NULL,
+                 status TEXT NOT NULL,
+                 execution_id TEXT NOT NULL,
+                 recorded_at_unix_ms INTEGER NOT NULL
              );",
         )?;
         let stored_version: Option<i64> =
@@ -1276,6 +1473,52 @@ impl SqliteRepository {
             state: next,
         })
     }
+
+    /// Persists a request targeting one immutable revision or candidate.
+    /// # Errors
+    /// Returns an error for a missing target, duplicate ID, or storage failure.
+    pub fn create_review_request(&mut self, request: &ReviewRequest) -> Result<(), StorageError> {
+        ensure_target_exists(&self.connection, request.target())?;
+        let inserted = self.connection.execute(
+            "INSERT OR IGNORE INTO review_requests(review_request_id, target_kind, target_id, requester, reviewers, created_at_unix_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![request.id.as_str(), request.target.kind(), request.target.id(), request.requester, request.reviewers, request.created_at_unix_ms],
+        )?;
+        if inserted == 0 {
+            return Err(StorageError::DuplicateReviewRequest(request.id.clone()));
+        }
+        Ok(())
+    }
+
+    /// Persists an immutable outcome against an existing exact-target request.
+    /// # Errors
+    /// Returns an error for a missing request, duplicate ID, or storage failure.
+    pub fn submit_review(&mut self, submission: &ReviewSubmission) -> Result<(), StorageError> {
+        let inserted = self.connection.execute(
+            "INSERT OR IGNORE INTO review_submissions(review_submission_id, review_request_id, reviewer, outcome, comments, submitted_at_unix_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![submission.id.as_str(), submission.request_id.as_str(), submission.reviewer, submission.outcome.as_str(), submission.comments, submission.submitted_at_unix_ms],
+        )?;
+        if inserted == 0 {
+            return Err(StorageError::DuplicateReviewSubmission(
+                submission.id.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Persists a validation result against one immutable revision or candidate.
+    /// # Errors
+    /// Returns an error for a missing target, duplicate ID, or storage failure.
+    pub fn record_validation(&mut self, result: &ValidationResult) -> Result<(), StorageError> {
+        ensure_target_exists(&self.connection, result.target())?;
+        let inserted = self.connection.execute(
+            "INSERT OR IGNORE INTO validation_results(validation_result_id, target_kind, target_id, kind, environment, status, execution_id, recorded_at_unix_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![result.id.as_str(), result.target.kind(), result.target.id(), result.kind, result.environment, result.status.as_str(), result.execution_id, result.recorded_at_unix_ms],
+        )?;
+        if inserted == 0 {
+            return Err(StorageError::DuplicateValidationResult(result.id.clone()));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -1291,6 +1534,9 @@ pub enum StorageError {
     DuplicateCandidate(CandidateId),
     DuplicateAssignment(AssignmentId),
     DuplicateMaterialization(MaterializationId),
+    DuplicateReviewRequest(ReviewRequestId),
+    DuplicateReviewSubmission(ReviewSubmissionId),
+    DuplicateValidationResult(ValidationResultId),
     DuplicateCandidateInput(ChangeId),
     DuplicateDependency,
     MissingChange(ChangeId),
@@ -1331,6 +1577,7 @@ pub enum StorageError {
     Invariant(&'static str),
 }
 
+#[allow(clippy::too_many_lines)]
 impl Display for StorageError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -1351,6 +1598,15 @@ impl Display for StorageError {
             }
             Self::DuplicateMaterialization(id) => {
                 write!(formatter, "duplicate materialization: {}", id.as_str())
+            }
+            Self::DuplicateReviewRequest(id) => {
+                write!(formatter, "duplicate review request: {}", id.as_str())
+            }
+            Self::DuplicateReviewSubmission(id) => {
+                write!(formatter, "duplicate review submission: {}", id.as_str())
+            }
+            Self::DuplicateValidationResult(id) => {
+                write!(formatter, "duplicate validation result: {}", id.as_str())
             }
             Self::DuplicateCandidateInput(id) => {
                 write!(
@@ -1471,6 +1727,41 @@ fn ensure_change_exists(
         Ok(())
     } else {
         Err(StorageError::MissingChange(change_id.clone()))
+    }
+}
+
+fn ensure_target_exists(connection: &Connection, target: &Target) -> Result<(), StorageError> {
+    match target {
+        Target::Revision(id) => {
+            let exists = connection
+                .query_row(
+                    "SELECT 1 FROM revisions WHERE revision_id = ?1",
+                    [id.as_str()],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if exists {
+                Ok(())
+            } else {
+                Err(StorageError::MissingRevision(id.clone()))
+            }
+        }
+        Target::Candidate(id) => {
+            let exists = connection
+                .query_row(
+                    "SELECT 1 FROM candidates WHERE candidate_id = ?1",
+                    [id.as_str()],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if exists {
+                Ok(())
+            } else {
+                Err(StorageError::MissingCandidate(id.clone()))
+            }
+        }
     }
 }
 
@@ -2145,6 +2436,98 @@ mod tests {
                 .unwrap()
                 .state(),
             MaterializationState::Dirty
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn persists_exact_review_and_validation_targets() {
+        let root = temporary_directory();
+        let database = root.join("weft.sqlite");
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let artifact = artifact(&store);
+        let change = ChangeId::new("change-1").unwrap();
+        let revision = RevisionId::new("revision-1").unwrap();
+        {
+            let mut repository = SqliteRepository::open(&database, store.clone()).unwrap();
+            repository.create_change(change.clone()).unwrap();
+            repository
+                .append_revision(&change, None, revision.clone(), &artifact)
+                .unwrap();
+            let request = ReviewRequest::new(
+                ReviewRequestId::new("review-1").unwrap(),
+                Target::Revision(revision.clone()),
+                "author",
+                "reviewer",
+                100,
+            )
+            .unwrap();
+            repository.create_review_request(&request).unwrap();
+            repository
+                .submit_review(
+                    &ReviewSubmission::new(
+                        ReviewSubmissionId::new("submission-1").unwrap(),
+                        request.id().clone(),
+                        "reviewer",
+                        ReviewOutcome::Approved,
+                        "looks good",
+                        101,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            repository
+                .record_validation(
+                    &ValidationResult::new(
+                        ValidationResultId::new("validation-1").unwrap(),
+                        Target::Revision(revision.clone()),
+                        "test",
+                        "local",
+                        ValidationStatus::Passed,
+                        "run-1",
+                        102,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            assert!(matches!(
+                repository.create_review_request(
+                    &ReviewRequest::new(
+                        ReviewRequestId::new("review-missing").unwrap(),
+                        Target::Revision(RevisionId::new("missing").unwrap()),
+                        "author",
+                        "reviewer",
+                        100,
+                    )
+                    .unwrap()
+                ),
+                Err(StorageError::MissingRevision(_))
+            ));
+        }
+        let repository = SqliteRepository::open(&database, store).unwrap();
+        assert_eq!(
+            repository
+                .connection
+                .query_row("SELECT COUNT(*) FROM review_requests", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            repository
+                .connection
+                .query_row("SELECT COUNT(*) FROM review_submissions", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            repository
+                .connection
+                .query_row("SELECT COUNT(*) FROM validation_results", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
         );
         fs::remove_dir_all(root).unwrap();
     }

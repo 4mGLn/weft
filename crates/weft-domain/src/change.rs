@@ -45,6 +45,9 @@ domain_id!(CandidateId);
 domain_id!(AssignmentId);
 domain_id!(MaterializationId);
 domain_id!(WorkspaceId);
+domain_id!(ReviewRequestId);
+domain_id!(ReviewSubmissionId);
+domain_id!(ValidationResultId);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BaseState {

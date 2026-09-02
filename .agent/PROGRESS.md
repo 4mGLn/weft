@@ -29,11 +29,13 @@ Phase 1 — Persistence and domain kernel.
   deterministic digests, restart reload, and explicit stale detection.
 - Added durable assignment-event history and exact-revision materialization
   records with guarded, auditable lifecycle transitions.
+- Added durable exact-target review requests/submissions and validation results;
+  these reject nonexistent targets and never accept mutable Change identities.
 
 ## Next checkpoint
 
-Extend the transactional repository to exact review/validation targets, then
-operation-idempotency and integration attempt/receipt records.
+Extend the transactional repository to operation-idempotency and integration
+attempt/receipt records, then close remaining Phase 1 query/audit gaps.
 
 ## Known gaps
 
