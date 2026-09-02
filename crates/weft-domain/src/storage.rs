@@ -11,12 +11,12 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::artifact::{PathOperation, is_sha256_digest, sha256_digest};
 use crate::{
-    AssignmentId, BaseState, CandidateId, CanonicalArtifact, ChangeError, ChangeId,
-    MaterializationId, RepositoryId, ReviewRequestId, ReviewSubmissionId, RevisionId,
-    ValidationResultId, WorkspaceId,
+    AssignmentId, BaseState, CandidateId, CanonicalArtifact, ChangeError, ChangeId, IntegrationId,
+    IntegrationReceiptId, MaterializationId, OperationId, RepositoryId, ReviewRequestId,
+    ReviewSubmissionId, RevisionId, ValidationResultId, WorkspaceId,
 };
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 static NEXT_TEMPORARY_OBJECT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
@@ -462,6 +462,135 @@ pub struct ValidationResult {
     execution_id: String,
     recorded_at_unix_ms: i64,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IntegrationState {
+    Planned,
+    Running,
+    Conflicted,
+    Failed,
+    Succeeded,
+    Aborted,
+}
+impl IntegrationState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Planned => "planned",
+            Self::Running => "running",
+            Self::Conflicted => "conflicted",
+            Self::Failed => "failed",
+            Self::Succeeded => "succeeded",
+            Self::Aborted => "aborted",
+        }
+    }
+    fn parse(value: &str) -> Result<Self, StorageError> {
+        match value {
+            "planned" => Ok(Self::Planned),
+            "running" => Ok(Self::Running),
+            "conflicted" => Ok(Self::Conflicted),
+            "failed" => Ok(Self::Failed),
+            "succeeded" => Ok(Self::Succeeded),
+            "aborted" => Ok(Self::Aborted),
+            _ => Err(StorageError::Invariant("unknown integration state")),
+        }
+    }
+    const fn may_transition_to(self, next: Self) -> bool {
+        matches!(
+            (self, next),
+            (Self::Planned, Self::Running | Self::Aborted)
+                | (
+                    Self::Running,
+                    Self::Conflicted | Self::Failed | Self::Succeeded | Self::Aborted
+                )
+        )
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IntegrationAttempt {
+    id: IntegrationId,
+    repository_id: RepositoryId,
+    candidate_id: CandidateId,
+    target_ref: String,
+    expected_target_revision: String,
+    provider: String,
+    strategy: String,
+    operation_id: OperationId,
+    actor: String,
+    state: IntegrationState,
+}
+impl IntegrationAttempt {
+    /// # Errors
+    /// Returns an error for invalid provider or operation metadata.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: IntegrationId,
+        repository_id: RepositoryId,
+        candidate_id: CandidateId,
+        target_ref: impl Into<String>,
+        expected_target_revision: impl Into<String>,
+        provider: impl Into<String>,
+        strategy: impl Into<String>,
+        operation_id: OperationId,
+        actor: impl Into<String>,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            id,
+            repository_id,
+            candidate_id,
+            target_ref: valid_event_value(target_ref.into(), "target ref")?,
+            expected_target_revision: valid_event_value(
+                expected_target_revision.into(),
+                "expected target",
+            )?,
+            provider: valid_event_value(provider.into(), "provider")?,
+            strategy: valid_event_value(strategy.into(), "strategy")?,
+            operation_id,
+            actor: valid_event_value(actor.into(), "actor")?,
+            state: IntegrationState::Planned,
+        })
+    }
+    #[must_use]
+    pub fn id(&self) -> &IntegrationId {
+        &self.id
+    }
+    #[must_use]
+    pub fn state(&self) -> IntegrationState {
+        self.state
+    }
+    #[must_use]
+    pub fn operation_id(&self) -> &OperationId {
+        &self.operation_id
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IntegrationReceipt {
+    id: IntegrationReceiptId,
+    integration_id: IntegrationId,
+    prior_target_revision: String,
+    result_revision: String,
+    provider_evidence: String,
+}
+impl IntegrationReceipt {
+    /// # Errors
+    /// Returns an error for invalid receipt metadata.
+    pub fn new(
+        id: IntegrationReceiptId,
+        integration_id: IntegrationId,
+        prior_target_revision: impl Into<String>,
+        result_revision: impl Into<String>,
+        provider_evidence: impl Into<String>,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            id,
+            integration_id,
+            prior_target_revision: valid_event_value(prior_target_revision.into(), "prior target")?,
+            result_revision: valid_event_value(result_revision.into(), "result revision")?,
+            provider_evidence: valid_event_value(provider_evidence.into(), "provider evidence")?,
+        })
+    }
+}
 impl ValidationResult {
     /// # Errors
     /// Returns an error for invalid validation metadata.
@@ -774,6 +903,25 @@ impl SqliteRepository {
                  status TEXT NOT NULL,
                  execution_id TEXT NOT NULL,
                  recorded_at_unix_ms INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS integration_attempts (
+                 integration_id TEXT PRIMARY KEY NOT NULL,
+                 repository_id TEXT NOT NULL,
+                 candidate_id TEXT NOT NULL REFERENCES candidates(candidate_id) ON DELETE RESTRICT,
+                 target_ref TEXT NOT NULL,
+                 expected_target_revision TEXT NOT NULL,
+                 provider TEXT NOT NULL,
+                 strategy TEXT NOT NULL,
+                 operation_id TEXT UNIQUE NOT NULL,
+                 actor TEXT NOT NULL,
+                 state TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS integration_receipts (
+                 receipt_id TEXT PRIMARY KEY NOT NULL,
+                 integration_id TEXT UNIQUE NOT NULL REFERENCES integration_attempts(integration_id) ON DELETE RESTRICT,
+                 prior_target_revision TEXT NOT NULL,
+                 result_revision TEXT NOT NULL,
+                 provider_evidence TEXT NOT NULL
              );",
         )?;
         let stored_version: Option<i64> =
@@ -1519,6 +1667,104 @@ impl SqliteRepository {
         }
         Ok(())
     }
+
+    /// Plans a provider-neutral integration from a fresh immutable candidate.
+    /// # Errors
+    /// Returns an error for a stale/missing candidate or reused operation ID.
+    pub fn plan_integration(&mut self, attempt: &IntegrationAttempt) -> Result<(), StorageError> {
+        if self.candidate_is_stale(&attempt.candidate_id)? {
+            return Err(StorageError::StaleCandidate(attempt.candidate_id.clone()));
+        }
+        let inserted = self.connection.execute(
+            "INSERT OR IGNORE INTO integration_attempts(integration_id, repository_id, candidate_id, target_ref, expected_target_revision, provider, strategy, operation_id, actor, state) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'planned')",
+            params![attempt.id.as_str(), attempt.repository_id.as_str(), attempt.candidate_id.as_str(), attempt.target_ref, attempt.expected_target_revision, attempt.provider, attempt.strategy, attempt.operation_id.as_str(), attempt.actor],
+        )?;
+        if inserted == 0 {
+            return Err(StorageError::DuplicateOperation(
+                attempt.operation_id.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Starts only a planned attempt when the provider-observed target is still exact.
+    /// # Errors
+    /// Returns a stale-target error rather than implicitly replanning.
+    pub fn start_integration(
+        &mut self,
+        integration_id: &IntegrationId,
+        observed_target: &str,
+        now_unix_ms: i64,
+    ) -> Result<(), StorageError> {
+        let row: Option<(String, String, String, String)> = self.connection.query_row(
+            "SELECT expected_target_revision, state, candidate_id, actor FROM integration_attempts WHERE integration_id = ?1", [integration_id.as_str()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        ).optional()?;
+        let (expected, state, candidate, actor) =
+            row.ok_or_else(|| StorageError::MissingIntegration(integration_id.clone()))?;
+        if expected != observed_target {
+            return Err(StorageError::StaleTarget {
+                expected,
+                actual: observed_target.to_owned(),
+            });
+        }
+        if IntegrationState::parse(&state)? != IntegrationState::Planned {
+            return Err(StorageError::InvalidIntegrationTransition);
+        }
+        for input in candidate_inputs(&self.connection, &CandidateId::new(candidate)?)? {
+            let lease: Option<(String, i64)> = self.connection.query_row(
+                "SELECT holder, expires_at_unix_ms FROM leases WHERE change_id = ?1 AND operation = 'integrate'",
+                [input.change_id().as_str()], |row| Ok((row.get(0)?, row.get(1)?)),
+            ).optional()?;
+            if !matches!(lease, Some((ref holder, expiry)) if holder == &actor && expiry > now_unix_ms)
+            {
+                return Err(StorageError::IntegrationLeaseRequired(
+                    input.change_id().clone(),
+                ));
+            }
+        }
+        self.connection.execute("UPDATE integration_attempts SET state = 'running' WHERE integration_id = ?1 AND state = 'planned'", [integration_id.as_str()])?;
+        Ok(())
+    }
+
+    /// Records a terminal provider outcome; only verified success can create a receipt.
+    /// # Errors
+    /// Returns an error for invalid transitions or success without a receipt.
+    pub fn finish_integration(
+        &mut self,
+        integration_id: &IntegrationId,
+        next: IntegrationState,
+        receipt: Option<&IntegrationReceipt>,
+    ) -> Result<(), StorageError> {
+        let state: String = self
+            .connection
+            .query_row(
+                "SELECT state FROM integration_attempts WHERE integration_id = ?1",
+                [integration_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::MissingIntegration(integration_id.clone()))?;
+        if !IntegrationState::parse(&state)?.may_transition_to(next) {
+            return Err(StorageError::InvalidIntegrationTransition);
+        }
+        if next == IntegrationState::Succeeded && receipt.is_none() {
+            return Err(StorageError::SuccessRequiresReceipt);
+        }
+        if let Some(receipt) = receipt {
+            if receipt.integration_id != *integration_id {
+                return Err(StorageError::ReceiptIntegrationMismatch);
+            }
+            if next != IntegrationState::Succeeded {
+                return Err(StorageError::ReceiptRequiresSuccess);
+            }
+            self.connection.execute("INSERT INTO integration_receipts(receipt_id, integration_id, prior_target_revision, result_revision, provider_evidence) VALUES (?1, ?2, ?3, ?4, ?5)", params![receipt.id.as_str(), integration_id.as_str(), receipt.prior_target_revision, receipt.result_revision, receipt.provider_evidence])?;
+        }
+        self.connection.execute(
+            "UPDATE integration_attempts SET state = ?1 WHERE integration_id = ?2",
+            params![next.as_str(), integration_id.as_str()],
+        )?;
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -1537,12 +1783,24 @@ pub enum StorageError {
     DuplicateReviewRequest(ReviewRequestId),
     DuplicateReviewSubmission(ReviewSubmissionId),
     DuplicateValidationResult(ValidationResultId),
+    DuplicateOperation(OperationId),
     DuplicateCandidateInput(ChangeId),
     DuplicateDependency,
     MissingChange(ChangeId),
     MissingRevision(RevisionId),
     MissingCandidate(CandidateId),
     MissingMaterialization(MaterializationId),
+    MissingIntegration(IntegrationId),
+    StaleCandidate(CandidateId),
+    StaleTarget {
+        expected: String,
+        actual: String,
+    },
+    InvalidIntegrationTransition,
+    SuccessRequiresReceipt,
+    ReceiptRequiresSuccess,
+    ReceiptIntegrationMismatch,
+    IntegrationLeaseRequired(ChangeId),
     EmptyCandidate,
     RevisionDoesNotBelongToChange {
         revision_id: RevisionId,
@@ -1608,6 +1866,9 @@ impl Display for StorageError {
             Self::DuplicateValidationResult(id) => {
                 write!(formatter, "duplicate validation result: {}", id.as_str())
             }
+            Self::DuplicateOperation(id) => {
+                write!(formatter, "duplicate operation: {}", id.as_str())
+            }
             Self::DuplicateCandidateInput(id) => {
                 write!(
                     formatter,
@@ -1622,6 +1883,31 @@ impl Display for StorageError {
             Self::MissingMaterialization(id) => {
                 write!(formatter, "missing materialization: {}", id.as_str())
             }
+            Self::MissingIntegration(id) => {
+                write!(formatter, "missing integration: {}", id.as_str())
+            }
+            Self::StaleCandidate(id) => write!(formatter, "stale candidate: {}", id.as_str()),
+            Self::StaleTarget { expected, actual } => write!(
+                formatter,
+                "stale target: expected {expected}, actual {actual}"
+            ),
+            Self::InvalidIntegrationTransition => {
+                formatter.write_str("invalid integration transition")
+            }
+            Self::SuccessRequiresReceipt => {
+                formatter.write_str("successful integration requires a verified receipt")
+            }
+            Self::ReceiptRequiresSuccess => {
+                formatter.write_str("receipt requires successful integration")
+            }
+            Self::ReceiptIntegrationMismatch => {
+                formatter.write_str("receipt does not match integration")
+            }
+            Self::IntegrationLeaseRequired(id) => write!(
+                formatter,
+                "integration lease required for change: {}",
+                id.as_str()
+            ),
             Self::EmptyCandidate => formatter.write_str("candidate requires at least one input"),
             Self::RevisionDoesNotBelongToChange {
                 revision_id,
@@ -2526,6 +2812,108 @@ mod tests {
                 .connection
                 .query_row("SELECT COUNT(*) FROM validation_results", [], |row| row
                     .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn guards_integration_target_operation_and_success_receipt() {
+        let root = temporary_directory();
+        let database = root.join("weft.sqlite");
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let artifact = artifact(&store);
+        let change = ChangeId::new("change-1").unwrap();
+        let revision = RevisionId::new("revision-1").unwrap();
+        let candidate_id = CandidateId::new("candidate-1").unwrap();
+        let integration_id = IntegrationId::new("integration-1").unwrap();
+        let operation_id = OperationId::new("operation-1").unwrap();
+        let attempt = IntegrationAttempt::new(
+            integration_id.clone(),
+            RepositoryId::new("repo-1").unwrap(),
+            candidate_id.clone(),
+            "refs/heads/main",
+            "target-r1",
+            "native-git",
+            "merge",
+            operation_id.clone(),
+            "agent-1",
+        )
+        .unwrap();
+        {
+            let mut repository = SqliteRepository::open(&database, store.clone()).unwrap();
+            repository.create_change(change.clone()).unwrap();
+            repository
+                .append_revision(&change, None, revision.clone(), &artifact)
+                .unwrap();
+            repository
+                .create_candidate(
+                    candidate_id.clone(),
+                    artifact.base().clone(),
+                    vec![CandidateInput::new(change, revision)],
+                )
+                .unwrap();
+            repository.plan_integration(&attempt).unwrap();
+            assert!(matches!(
+                repository.plan_integration(&attempt),
+                Err(StorageError::DuplicateOperation(_))
+            ));
+            assert!(matches!(
+                repository.start_integration(&integration_id, "target-r2", 100),
+                Err(StorageError::StaleTarget { .. })
+            ));
+            assert!(matches!(
+                repository.start_integration(&integration_id, "target-r1", 100),
+                Err(StorageError::IntegrationLeaseRequired(_))
+            ));
+            repository
+                .acquire_lease(
+                    &ChangeId::new("change-1").unwrap(),
+                    "integrate",
+                    "agent-1",
+                    100,
+                    200,
+                )
+                .unwrap();
+            repository
+                .start_integration(&integration_id, "target-r1", 100)
+                .unwrap();
+            assert!(matches!(
+                repository.finish_integration(&integration_id, IntegrationState::Succeeded, None),
+                Err(StorageError::SuccessRequiresReceipt)
+            ));
+            let receipt = IntegrationReceipt::new(
+                IntegrationReceiptId::new("receipt-1").unwrap(),
+                integration_id.clone(),
+                "target-r1",
+                "target-r2",
+                "verified by provider",
+            )
+            .unwrap();
+            repository
+                .finish_integration(&integration_id, IntegrationState::Succeeded, Some(&receipt))
+                .unwrap();
+        }
+        let repository = SqliteRepository::open(&database, store).unwrap();
+        assert_eq!(
+            repository
+                .connection
+                .query_row(
+                    "SELECT state FROM integration_attempts WHERE integration_id = ?1",
+                    [integration_id.as_str()],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            "succeeded"
+        );
+        assert_eq!(
+            repository
+                .connection
+                .query_row("SELECT COUNT(*) FROM integration_receipts", [], |row| row
+                    .get::<_, i64>(
+                    0
+                ))
                 .unwrap(),
             1
         );

@@ -31,11 +31,14 @@ Phase 1 — Persistence and domain kernel.
   records with guarded, auditable lifecycle transitions.
 - Added durable exact-target review requests/submissions and validation results;
   these reject nonexistent targets and never accept mutable Change identities.
+- Added durable integration attempts with operation-ID idempotency, fresh-candidate
+  planning, expected-target guarding, required operation leases, terminal state
+  validation, and receipts required for success.
 
 ## Next checkpoint
 
-Extend the transactional repository to operation-idempotency and integration
-attempt/receipt records, then close remaining Phase 1 query/audit gaps.
+Extend the transactional repository to durable Stack versions, then close
+remaining Phase 1 query/audit and recovery gaps.
 
 ## Known gaps
 
