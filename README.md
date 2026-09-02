@@ -6,7 +6,10 @@ It treats a Change—not a branch, worktree, commit, or agent session—as the d
 
 ## Project status
 
-Weft completed its Phase 0 provider feasibility baseline and has started Phase 1 with a Rust domain kernel. The storage engine, CLI, deployment image, and compatibility guarantees are not implemented yet.
+Weft completed its Phase 0 provider feasibility baseline and has a Phase 1 Rust
+domain kernel with SQLite Change/Revision persistence and a verified filesystem
+canonical-artifact store. Provider adapters, CLI, deployment image, and
+compatibility guarantees are not implemented yet.
 
 ## Start here
 

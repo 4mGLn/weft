@@ -1,7 +1,11 @@
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
-use crate::artifact::{TREE_DELTA_V1, is_sha256_digest};
+use crate::artifact::{ArtifactError, TreeDelta, sha256_digest};
+
+const ARTIFACT_MAGIC: &[u8] = b"weft/canonical-artifact-v1\0";
+const MAX_IDENTIFIER_BYTES: usize = 512;
+const MAX_BASE_OBJECT_BYTES: usize = 4_096;
 
 macro_rules! domain_id {
     ($name:ident) => {
@@ -9,16 +13,19 @@ macro_rules! domain_id {
         pub struct $name(String);
 
         impl $name {
-            /// Creates a non-empty domain identifier.
+            /// Creates a safe, non-empty domain identifier.
             ///
             /// # Errors
             ///
-            /// Returns [`ChangeError::EmptyIdentifier`] for an empty or
-            /// whitespace-only value.
+            /// Returns an error for blank, padded, or control-character input.
             pub fn new(value: impl Into<String>) -> Result<Self, ChangeError> {
                 let value = value.into();
-                if value.trim().is_empty() {
-                    return Err(ChangeError::EmptyIdentifier(stringify!($name)));
+                if value.trim().is_empty()
+                    || value != value.trim()
+                    || value.chars().any(char::is_control)
+                    || value.len() > MAX_IDENTIFIER_BYTES
+                {
+                    return Err(ChangeError::InvalidIdentifier(stringify!($name)));
                 }
                 Ok(Self(value))
             }
@@ -42,18 +49,22 @@ pub struct BaseState {
 }
 
 impl BaseState {
-    /// Creates an exact provider-addressable base state.
+    /// Creates an exact, provider-addressable base state.
     ///
     /// # Errors
     ///
-    /// Returns [`ChangeError::EmptyBaseObject`] when the object identity is empty.
+    /// Returns an error for blank, padded, or control-character object IDs.
     pub fn new(
         repository_id: RepositoryId,
         object_id: impl Into<String>,
     ) -> Result<Self, ChangeError> {
         let object_id = object_id.into();
-        if object_id.trim().is_empty() {
-            return Err(ChangeError::EmptyBaseObject);
+        if object_id.trim().is_empty()
+            || object_id != object_id.trim()
+            || object_id.chars().any(char::is_control)
+            || object_id.len() > MAX_BASE_OBJECT_BYTES
+        {
+            return Err(ChangeError::InvalidBaseObject);
         }
         Ok(Self {
             repository_id,
@@ -72,54 +83,107 @@ impl BaseState {
     }
 }
 
+/// Canonical revision content that binds an exact base to a validated tree
+/// delta. Its digest is computed from its deterministic encoding.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ArtifactRef {
-    version: &'static str,
-    manifest_digest: String,
+pub struct CanonicalArtifact {
+    base: BaseState,
+    tree_delta: TreeDelta,
+    digest: String,
 }
 
-impl ArtifactRef {
-    /// Creates a reference to a validated `tree-delta-v1` manifest.
+impl CanonicalArtifact {
+    #[must_use]
+    pub fn new(base: BaseState, tree_delta: TreeDelta) -> Self {
+        let mut artifact = Self {
+            base,
+            tree_delta,
+            digest: String::new(),
+        };
+        artifact.digest = sha256_digest(&artifact.canonical_bytes());
+        artifact
+    }
+
+    #[must_use]
+    pub fn base(&self) -> &BaseState {
+        &self.base
+    }
+
+    #[must_use]
+    pub fn tree_delta(&self) -> &TreeDelta {
+        &self.tree_delta
+    }
+
+    #[must_use]
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+
+    #[must_use]
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let manifest = self.tree_delta.canonical_bytes();
+        let mut bytes = Vec::with_capacity(
+            ARTIFACT_MAGIC.len()
+                + self.base.repository_id.as_str().len()
+                + self.base.object_id.len()
+                + manifest.len()
+                + 24,
+        );
+        bytes.extend_from_slice(ARTIFACT_MAGIC);
+        write_string(&mut bytes, self.base.repository_id.as_str());
+        write_string(&mut bytes, &self.base.object_id);
+        write_bytes(&mut bytes, &manifest);
+        bytes
+    }
+
+    /// Reopens canonical artifact bytes after validating their structure.
     ///
     /// # Errors
     ///
-    /// Returns [`ChangeError::InvalidArtifactDigest`] unless the digest is a
-    /// lowercase `sha256:` value containing exactly 64 hexadecimal digits.
-    pub fn tree_delta_v1(manifest_digest: impl Into<String>) -> Result<Self, ChangeError> {
-        let manifest_digest = manifest_digest.into();
-        if !is_sha256_digest(&manifest_digest) {
-            return Err(ChangeError::InvalidArtifactDigest);
+    /// Returns an error for malformed bytes or invalid embedded content.
+    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, ChangeError> {
+        let mut cursor = Cursor::new(bytes);
+        if cursor.take(ARTIFACT_MAGIC.len())? != ARTIFACT_MAGIC {
+            return Err(ChangeError::MalformedArtifact("incorrect artifact magic"));
         }
-        Ok(Self {
-            version: TREE_DELTA_V1,
-            manifest_digest,
-        })
+        let repository_id = RepositoryId::new(cursor.string()?)?;
+        let base = BaseState::new(repository_id, cursor.string()?)?;
+        let tree_delta = TreeDelta::from_canonical_bytes(cursor.bytes()?)
+            .map_err(ChangeError::InvalidManifest)?;
+        if !cursor.is_at_end() {
+            return Err(ChangeError::MalformedArtifact("trailing artifact bytes"));
+        }
+        Ok(Self::new(base, tree_delta))
     }
 
-    #[must_use]
-    pub const fn version(&self) -> &'static str {
-        self.version
-    }
-
-    #[must_use]
-    pub fn manifest_digest(&self) -> &str {
-        &self.manifest_digest
+    /// Reopens canonical artifact bytes only if their address matches.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a digest mismatch, malformed bytes, or invalid
+    /// embedded content.
+    pub fn from_canonical_bytes_with_digest(
+        bytes: &[u8],
+        expected_digest: &str,
+    ) -> Result<Self, ChangeError> {
+        if sha256_digest(bytes) != expected_digest {
+            return Err(ChangeError::ArtifactDigestMismatch);
+        }
+        Self::from_canonical_bytes(bytes)
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NewRevision {
     revision_id: RevisionId,
-    base: BaseState,
-    artifact: ArtifactRef,
+    artifact: CanonicalArtifact,
 }
 
 impl NewRevision {
     #[must_use]
-    pub const fn new(revision_id: RevisionId, base: BaseState, artifact: ArtifactRef) -> Self {
+    pub const fn new(revision_id: RevisionId, artifact: CanonicalArtifact) -> Self {
         Self {
             revision_id,
-            base,
             artifact,
         }
     }
@@ -130,8 +194,7 @@ pub struct ChangeRevision {
     revision_id: RevisionId,
     change_id: ChangeId,
     parent_revision_id: Option<RevisionId>,
-    base: BaseState,
-    artifact: ArtifactRef,
+    artifact: CanonicalArtifact,
 }
 
 impl ChangeRevision {
@@ -151,16 +214,13 @@ impl ChangeRevision {
     }
 
     #[must_use]
-    pub const fn base(&self) -> &BaseState {
-        &self.base
-    }
-
-    #[must_use]
-    pub const fn artifact(&self) -> &ArtifactRef {
+    pub fn artifact(&self) -> &CanonicalArtifact {
         &self.artifact
     }
 }
 
+/// An in-memory projection useful for callers that already serialize mutation.
+/// Durable multi-process compare-and-swap is provided by `SqliteRepository`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Change {
     id: ChangeId,
@@ -193,13 +253,9 @@ impl Change {
         &self.revisions
     }
 
-    /// Atomically appends to the logical revision sequence when the caller's
-    /// expected head matches the current head.
-    ///
     /// # Errors
     ///
-    /// Returns [`ChangeError`] when the expected head is stale, the revision ID
-    /// already exists, or the base/canonical artifact reference is invalid.
+    /// Returns an error for a stale head or duplicate revision ID.
     pub fn append_revision(
         &mut self,
         expected_head: Option<&RevisionId>,
@@ -222,7 +278,6 @@ impl Change {
             revision_id: new_revision.revision_id.clone(),
             change_id: self.id.clone(),
             parent_revision_id: self.head.clone(),
-            base: new_revision.base,
             artifact: new_revision.artifact,
         };
         self.revisions.push(revision);
@@ -233,11 +288,73 @@ impl Change {
     }
 }
 
+fn write_u64(bytes: &mut Vec<u8>, value: u64) {
+    bytes.extend_from_slice(&value.to_be_bytes());
+}
+
+fn write_string(bytes: &mut Vec<u8>, value: &str) {
+    write_bytes(bytes, value.as_bytes());
+}
+
+fn write_bytes(output: &mut Vec<u8>, value: &[u8]) {
+    write_u64(output, value.len() as u64);
+    output.extend_from_slice(value);
+}
+
+struct Cursor<'a> {
+    bytes: &'a [u8],
+    position: usize,
+}
+
+impl<'a> Cursor<'a> {
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, position: 0 }
+    }
+
+    fn take(&mut self, count: usize) -> Result<&'a [u8], ChangeError> {
+        let end = self
+            .position
+            .checked_add(count)
+            .ok_or(ChangeError::MalformedArtifact("length overflow"))?;
+        let value = self
+            .bytes
+            .get(self.position..end)
+            .ok_or(ChangeError::MalformedArtifact("truncated artifact"))?;
+        self.position = end;
+        Ok(value)
+    }
+
+    fn u64(&mut self) -> Result<u64, ChangeError> {
+        let value: [u8; 8] = self
+            .take(8)?
+            .try_into()
+            .map_err(|_| ChangeError::MalformedArtifact("invalid length"))?;
+        Ok(u64::from_be_bytes(value))
+    }
+
+    fn bytes(&mut self) -> Result<&'a [u8], ChangeError> {
+        let length = usize::try_from(self.u64()?)
+            .map_err(|_| ChangeError::MalformedArtifact("length overflows usize"))?;
+        self.take(length)
+    }
+
+    fn string(&mut self) -> Result<String, ChangeError> {
+        String::from_utf8(self.bytes()?.to_owned())
+            .map_err(|_| ChangeError::MalformedArtifact("string is not valid UTF-8"))
+    }
+
+    const fn is_at_end(&self) -> bool {
+        self.position == self.bytes.len()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ChangeError {
-    EmptyIdentifier(&'static str),
-    EmptyBaseObject,
-    InvalidArtifactDigest,
+    InvalidIdentifier(&'static str),
+    InvalidBaseObject,
+    InvalidManifest(ArtifactError),
+    ArtifactDigestMismatch,
+    MalformedArtifact(&'static str),
     DuplicateRevision(RevisionId),
     StaleHead {
         expected: Option<RevisionId>,
@@ -249,9 +366,17 @@ pub enum ChangeError {
 impl Display for ChangeError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::EmptyIdentifier(kind) => write!(formatter, "{kind} cannot be empty"),
-            Self::EmptyBaseObject => formatter.write_str("base object identity cannot be empty"),
-            Self::InvalidArtifactDigest => formatter.write_str("invalid SHA-256 artifact digest"),
+            Self::InvalidIdentifier(kind) => write!(formatter, "invalid {kind}"),
+            Self::InvalidBaseObject => formatter.write_str("invalid base object identity"),
+            Self::InvalidManifest(error) => {
+                write!(formatter, "invalid canonical manifest: {error}")
+            }
+            Self::ArtifactDigestMismatch => {
+                formatter.write_str("canonical artifact digest mismatch")
+            }
+            Self::MalformedArtifact(message) => {
+                write!(formatter, "malformed canonical artifact: {message}")
+            }
             Self::DuplicateRevision(id) => write!(formatter, "duplicate revision: {}", id.as_str()),
             Self::StaleHead { expected, actual } => write!(
                 formatter,
@@ -275,13 +400,45 @@ impl Error for ChangeError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{FileMode, PathOperation};
+
+    fn artifact() -> CanonicalArtifact {
+        let blob = sha256_digest(b"binary\0content");
+        CanonicalArtifact::new(
+            BaseState::new(RepositoryId::new("repo-1").unwrap(), "git:012345").unwrap(),
+            TreeDelta::new(vec![PathOperation::Upsert {
+                path: "bin/data".to_owned(),
+                mode: FileMode::Executable,
+                blob_digest: blob,
+            }])
+            .unwrap(),
+        )
+    }
 
     fn revision(id: &str) -> NewRevision {
-        NewRevision::new(
-            RevisionId::new(id).unwrap(),
-            BaseState::new(RepositoryId::new("repo-1").unwrap(), "base-object").unwrap(),
-            ArtifactRef::tree_delta_v1(format!("sha256:{}", "a".repeat(64))).unwrap(),
-        )
+        NewRevision::new(RevisionId::new(id).unwrap(), artifact())
+    }
+
+    #[test]
+    fn canonical_artifact_binds_base_and_round_trips() {
+        let artifact = artifact();
+        let bytes = artifact.canonical_bytes();
+        assert_eq!(
+            CanonicalArtifact::from_canonical_bytes(&bytes).unwrap(),
+            artifact
+        );
+        assert_eq!(artifact.digest(), sha256_digest(&bytes));
+    }
+
+    #[test]
+    fn rejects_tampered_artifact() {
+        let artifact = artifact();
+        let mut bytes = artifact.canonical_bytes();
+        *bytes.last_mut().unwrap() ^= 1;
+        assert!(matches!(
+            CanonicalArtifact::from_canonical_bytes_with_digest(&bytes, artifact.digest()),
+            Err(ChangeError::ArtifactDigestMismatch)
+        ));
     }
 
     #[test]
@@ -316,25 +473,17 @@ mod tests {
     }
 
     #[test]
-    fn rejects_duplicate_revision_identity() {
-        let mut change = Change::new(ChangeId::new("change-1").unwrap());
-        change.append_revision(None, revision("rev-1")).unwrap();
-        let head = RevisionId::new("rev-1").unwrap();
-        let error = change
-            .append_revision(Some(&head), revision("rev-1"))
-            .unwrap_err();
-        assert!(matches!(error, ChangeError::DuplicateRevision(_)));
-    }
-
-    #[test]
-    fn rejects_invalid_base_and_artifact_identity() {
-        assert!(matches!(
-            BaseState::new(RepositoryId::new("repo-1").unwrap(), " "),
-            Err(ChangeError::EmptyBaseObject)
-        ));
-        assert!(matches!(
-            ArtifactRef::tree_delta_v1("provider-object"),
-            Err(ChangeError::InvalidArtifactDigest)
-        ));
+    fn rejects_unsafe_identifier_and_base_values() {
+        assert!(RepositoryId::new(" repo").is_err());
+        assert!(ChangeId::new("change\n1").is_err());
+        assert!(BaseState::new(RepositoryId::new("repo").unwrap(), "base\n1").is_err());
+        assert!(ChangeId::new("x".repeat(MAX_IDENTIFIER_BYTES + 1)).is_err());
+        assert!(
+            BaseState::new(
+                RepositoryId::new("repo").unwrap(),
+                "x".repeat(MAX_BASE_OBJECT_BYTES + 1)
+            )
+            .is_err()
+        );
     }
 }

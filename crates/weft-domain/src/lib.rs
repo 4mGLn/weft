@@ -2,9 +2,11 @@
 
 mod artifact;
 mod change;
+mod storage;
 
-pub use artifact::{ArtifactError, FileMode, PathOperation, TreeDelta};
+pub use artifact::{ArtifactError, FileMode, PathOperation, TreeDelta, sha256_digest};
 pub use change::{
-    ArtifactRef, BaseState, Change, ChangeError, ChangeId, ChangeRevision, NewRevision,
+    BaseState, CanonicalArtifact, Change, ChangeError, ChangeId, ChangeRevision, NewRevision,
     RepositoryId, RevisionId,
 };
+pub use storage::{AuditEvent, ContentStore, Lease, SqliteRepository, StorageError, StoredChange};

@@ -17,18 +17,22 @@ Phase 1 — Persistence and domain kernel.
   commits, and external-target reconciliation.
 - Completed the Phase 0 capability matrix, technical report, and implementation
   foundation decision (Rust, SQLite metadata, filesystem CAS, capability adapters).
-- Started Phase 1 with a compiling Rust workspace and sealed domain types for
-  linear revision-head CAS and canonical `tree-delta-v1` manifests; all eight
-  focused tests and the strict workspace gate pass.
+- Implemented durable Phase 1 Change/Revision foundations: deterministic
+  base-bound canonical artifacts, verified filesystem CAS blobs/manifests, and
+  SQLite WAL persistence with transactional head compare-and-swap.
+- Proved canonical artifact reopen and independent-connection competing-writer
+  behavior; all fifteen focused tests and the strict workspace gate pass.
+- Added SQLite-backed exclusive leases with expiry recovery and ordered audit
+  events for Change creation, revision appends, and lease acquisition.
 
 ## Next checkpoint
 
-Add SQLite migrations and transactional repositories for Change and ChangeRevision,
-then prove stale-head behavior across independent connections/processes.
+Extend the transactional repository to relationships and immutable
+CompositionCandidates.
 
 ## Known gaps
 
-- No runtime implementation, storage engine, or stable CLI.
+- No provider runtime implementation or stable CLI.
 - GitButler provider removal/reconnect and crash-uncertain landing remain unproven
   implementation gates.
 - No runtime packaging or deployment support.

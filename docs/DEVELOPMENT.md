@@ -12,7 +12,10 @@ The current gate validates the agent harness, local Markdown links, Rust formatt
 
 ## Rust workspace
 
-Phase 1 uses the pinned toolchain in `rust-toolchain.toml`. Keep domain invariants in `crates/weft-domain` independent of SQLite, subprocesses, and provider JSON. Storage and provider crates will depend inward on domain types, never the reverse.
+Phase 1 uses the pinned toolchain in `rust-toolchain.toml`. The
+`weft-domain` crate contains provider-neutral domain types plus the local
+SQLite/CAS repository that enforces durable Change/Revision creation. Provider
+subprocesses and provider JSON remain outside this crate's public domain types.
 
 The stable `make check` gate explicitly tests the active Rust host target so a developer's global cross-compilation default cannot silently change local verification. Cross-target builds will become separate release-matrix gates after packaging is decided.
 

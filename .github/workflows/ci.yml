@@ -19,3 +19,9 @@ jobs:
         run: make check
       - name: Verify Native Git feasibility contract
         run: make phase0-native-git-spike
+      - name: Install GitButler CLI
+        run: |
+          curl -fsSL https://gitbutler.com/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Verify GitButler feasibility contract
+        run: make phase0-gitbutler-spike
