@@ -36,15 +36,26 @@ Phase 1 — Persistence and domain kernel.
   validation, and receipts required for success.
 - Added durable, ordered, duplicate-free Stack versions with optimistic updates
   and immutable historical reads.
+- Added durable change relationships, exact-revision overlap signals, candidate
+  stack-version provenance, exact-target validation and review-history reads,
+  and revision/candidate staleness projection.
+- Added lease renewal/release, conflict and reconciliation evidence, and
+  operation-ID retry behavior that returns the durable integration attempt rather
+  than duplicating provider work.
+- Made integration start, conflict capture, and terminal receipt persistence
+  transactionally guarded; integration start automatically emits complete domain
+  evidence in the same transaction and is proven across independent connections.
 
 ## Next checkpoint
 
-Audit and close the remaining Phase 1 query, audit, recovery, and relationship
-semantics gaps before the Phase 1 acceptance review.
+Close the remaining complete-audit, explicit-reuse, and interrupted-operation
+recovery semantics before the Phase 1 acceptance review.
 
 ## Known gaps
 
 - No provider runtime implementation or stable CLI.
+- Phase 1's complete automatic audit contract is not yet implemented for all
+  correctness-sensitive transitions; Phase 2 provider mutation remains gated on it.
 - GitButler provider removal/reconnect and crash-uncertain landing remain unproven
   implementation gates.
 - No runtime packaging or deployment support.
