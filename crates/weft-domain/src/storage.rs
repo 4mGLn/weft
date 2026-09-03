@@ -2293,8 +2293,10 @@ impl SqliteRepository {
         next: IntegrationState,
         receipt: Option<&IntegrationReceipt>,
     ) -> Result<(), StorageError> {
-        let state: String = self
+        let transaction = self
             .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let state: String = transaction
             .query_row(
                 "SELECT state FROM integration_attempts WHERE integration_id = ?1",
                 [integration_id.as_str()],
@@ -2315,12 +2317,18 @@ impl SqliteRepository {
             if next != IntegrationState::Succeeded {
                 return Err(StorageError::ReceiptRequiresSuccess);
             }
-            self.connection.execute("INSERT INTO integration_receipts(receipt_id, integration_id, prior_target_revision, result_revision, provider_evidence) VALUES (?1, ?2, ?3, ?4, ?5)", params![receipt.id.as_str(), integration_id.as_str(), receipt.prior_target_revision, receipt.result_revision, receipt.provider_evidence])?;
+            transaction.execute("INSERT INTO integration_receipts(receipt_id, integration_id, prior_target_revision, result_revision, provider_evidence) VALUES (?1, ?2, ?3, ?4, ?5)", params![receipt.id.as_str(), integration_id.as_str(), receipt.prior_target_revision, receipt.result_revision, receipt.provider_evidence])?;
         }
-        self.connection.execute(
-            "UPDATE integration_attempts SET state = ?1 WHERE integration_id = ?2",
-            params![next.as_str(), integration_id.as_str()],
+        let updated = transaction.execute(
+            "UPDATE integration_attempts SET state = ?1 WHERE integration_id = ?2 AND state = ?3",
+            params![next.as_str(), integration_id.as_str(), state],
         )?;
+        if updated != 1 {
+            return Err(StorageError::Invariant(
+                "integration changed during immediate transaction",
+            ));
+        }
+        transaction.commit()?;
         Ok(())
     }
 
@@ -2453,8 +2461,10 @@ impl SqliteRepository {
         &mut self,
         conflict: &IntegrationConflict,
     ) -> Result<(), StorageError> {
-        let row: Option<(String, String)> = self
+        let transaction = self
             .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let row: Option<(String, String)> = transaction
             .query_row(
                 "SELECT candidate_id, state FROM integration_attempts WHERE integration_id = ?1",
                 [conflict.integration_id.as_str()],
@@ -2469,8 +2479,14 @@ impl SqliteRepository {
         if IntegrationState::parse(&state)? != IntegrationState::Running {
             return Err(StorageError::InvalidIntegrationTransition);
         }
-        self.connection.execute("INSERT INTO integration_conflicts(conflict_id, integration_id, candidate_id, provider_state, attempted_operation, resolver, resulting_target, validation_evidence) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", params![conflict.id.as_str(), conflict.integration_id.as_str(), conflict.candidate_id.as_str(), conflict.provider_state, conflict.attempted_operation, conflict.resolver, conflict.resulting_target, conflict.validation_evidence])?;
-        self.connection.execute("UPDATE integration_attempts SET state = 'conflicted' WHERE integration_id = ?1 AND state = 'running'", [conflict.integration_id.as_str()])?;
+        transaction.execute("INSERT INTO integration_conflicts(conflict_id, integration_id, candidate_id, provider_state, attempted_operation, resolver, resulting_target, validation_evidence) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", params![conflict.id.as_str(), conflict.integration_id.as_str(), conflict.candidate_id.as_str(), conflict.provider_state, conflict.attempted_operation, conflict.resolver, conflict.resulting_target, conflict.validation_evidence])?;
+        let updated = transaction.execute("UPDATE integration_attempts SET state = 'conflicted' WHERE integration_id = ?1 AND state = 'running'", [conflict.integration_id.as_str()])?;
+        if updated != 1 {
+            return Err(StorageError::Invariant(
+                "integration changed during immediate transaction",
+            ));
+        }
+        transaction.commit()?;
         Ok(())
     }
 
