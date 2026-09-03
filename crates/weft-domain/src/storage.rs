@@ -1820,6 +1820,7 @@ impl SqliteRepository {
         target_base: BaseState,
         inputs: Vec<CandidateInput>,
     ) -> Result<CompositionCandidate, StorageError> {
+        let audit = AuditContext::local();
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -1872,6 +1873,15 @@ impl SqliteRepository {
                 ],
             )?;
         }
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('candidate-created', ?1, ?2, 'absent', 'created', ?3, NULL, ?4)",
+            params![
+                audit.actor,
+                audit.occurred_at_unix_ms,
+                format!("{},{}", candidate_id.as_str(), target_base.object_id()),
+                format!("content-digest:{}", content_digest),
+            ],
+        )?;
         transaction.commit()?;
         Ok(CompositionCandidate {
             candidate_id,
