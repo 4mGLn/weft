@@ -17,7 +17,7 @@ use crate::{
     WorkspaceId,
 };
 
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 static NEXT_TEMPORARY_OBJECT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
@@ -1033,7 +1033,9 @@ impl SqliteRepository {
                  candidate_id TEXT PRIMARY KEY NOT NULL,
                  repository_id TEXT NOT NULL,
                  target_base_object_id TEXT NOT NULL,
-                 content_digest TEXT NOT NULL
+                 content_digest TEXT NOT NULL,
+                 stack_id TEXT NULL,
+                 stack_version INTEGER NULL
              );
              CREATE TABLE IF NOT EXISTS candidate_inputs (
                  candidate_id TEXT NOT NULL REFERENCES candidates(candidate_id) ON DELETE RESTRICT,
@@ -1598,6 +1600,31 @@ impl SqliteRepository {
             resolved_dependencies,
             content_digest,
         })
+    }
+
+    /// Creates a candidate and records the exact immutable Stack version it consumed.
+    /// # Errors
+    /// Returns an error if inputs differ from the specified Stack version.
+    pub fn create_candidate_from_stack(
+        &mut self,
+        candidate_id: &CandidateId,
+        target_base: BaseState,
+        inputs: Vec<CandidateInput>,
+        stack_id: &StackId,
+        stack_version: i64,
+    ) -> Result<CompositionCandidate, StorageError> {
+        let stack = self.load_stack(stack_id, stack_version)?;
+        let input_changes: Vec<_> = inputs.iter().map(CandidateInput::change_id).collect();
+        let stack_changes: Vec<_> = stack.changes().iter().collect();
+        if input_changes != stack_changes {
+            return Err(StorageError::CandidateStackMismatch);
+        }
+        let candidate = self.create_candidate(candidate_id.clone(), target_base, inputs)?;
+        self.connection.execute(
+            "UPDATE candidates SET stack_id = ?1, stack_version = ?2 WHERE candidate_id = ?3",
+            params![stack_id.as_str(), stack_version, candidate_id.as_str()],
+        )?;
+        Ok(candidate)
     }
 
     /// Loads a candidate's immutable snapshot. It never resolves current heads.
@@ -2279,6 +2306,7 @@ pub enum StorageError {
     DuplicateStackEntry,
     ConflictCandidateMismatch,
     DuplicateChangeRelation,
+    CandidateStackMismatch,
     StaleStackVersion {
         expected: i64,
         actual: i64,
@@ -2404,6 +2432,9 @@ impl Display for StorageError {
                 formatter.write_str("conflict candidate does not match integration")
             }
             Self::DuplicateChangeRelation => formatter.write_str("duplicate change relation"),
+            Self::CandidateStackMismatch => {
+                formatter.write_str("candidate inputs do not match stack version")
+            }
             Self::StaleStackVersion { expected, actual } => write!(
                 formatter,
                 "stale stack version: expected {expected}, actual {actual}"
@@ -3170,6 +3201,65 @@ mod tests {
                 .unwrap()
                 .inputs()
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn records_exact_stack_version_for_candidate_inputs() {
+        let root = temporary_directory();
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let artifact = artifact(&store);
+        let mut repository = SqliteRepository::open(root.join("weft.sqlite"), store).unwrap();
+        let first = ChangeId::new("first").unwrap();
+        let second = ChangeId::new("second").unwrap();
+        let first_revision = RevisionId::new("first-r1").unwrap();
+        let second_revision = RevisionId::new("second-r1").unwrap();
+        for (change, revision) in [(&first, &first_revision), (&second, &second_revision)] {
+            repository.create_change(change.clone()).unwrap();
+            repository
+                .append_revision(change, None, revision.clone(), &artifact)
+                .unwrap();
+        }
+        let stack = StackId::new("stack-1").unwrap();
+        repository
+            .create_stack(stack.clone(), vec![first.clone(), second.clone()])
+            .unwrap();
+        repository
+            .create_candidate_from_stack(
+                &CandidateId::new("candidate-1").unwrap(),
+                artifact.base().clone(),
+                vec![
+                    CandidateInput::new(first.clone(), first_revision.clone()),
+                    CandidateInput::new(second.clone(), second_revision.clone()),
+                ],
+                &stack,
+                1,
+            )
+            .unwrap();
+        assert_eq!(
+            repository
+                .connection
+                .query_row(
+                    "SELECT stack_version FROM candidates WHERE candidate_id = 'candidate-1'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        assert!(matches!(
+            repository.create_candidate_from_stack(
+                &CandidateId::new("candidate-bad").unwrap(),
+                artifact.base().clone(),
+                vec![
+                    CandidateInput::new(second, second_revision),
+                    CandidateInput::new(first, first_revision)
+                ],
+                &stack,
+                1
+            ),
+            Err(StorageError::CandidateStackMismatch)
+        ));
         fs::remove_dir_all(root).unwrap();
     }
 
