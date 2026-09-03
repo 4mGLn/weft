@@ -12,12 +12,12 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use crate::artifact::{PathOperation, is_sha256_digest, sha256_digest};
 use crate::{
     AssignmentId, BaseState, CandidateId, CanonicalArtifact, ChangeError, ChangeId, ConflictId,
-    IntegrationId, IntegrationReceiptId, MaterializationId, OperationId, ReconciliationId,
-    RepositoryId, ReviewRequestId, ReviewSubmissionId, RevisionId, StackId, ValidationResultId,
-    WorkspaceId,
+    IntegrationId, IntegrationReceiptId, MaterializationId, OperationId, OverlapId,
+    ReconciliationId, RepositoryId, ReviewRequestId, ReviewSubmissionId, RevisionId, StackId,
+    ValidationResultId, WorkspaceId,
 };
 
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 13;
 static NEXT_TEMPORARY_OBJECT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
@@ -234,6 +234,37 @@ pub struct ReconciliationRecord {
     observed_state: String,
     evidence: String,
     resolved: bool,
+}
+
+/// A non-conclusive risk signal that two exact revisions overlap.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Overlap {
+    id: OverlapId,
+    left_revision: RevisionId,
+    right_revision: RevisionId,
+    detail: String,
+}
+impl Overlap {
+    /// # Errors
+    /// Returns an error for invalid detail metadata.
+    pub fn new(
+        id: OverlapId,
+        left_revision: RevisionId,
+        right_revision: RevisionId,
+        detail: impl Into<String>,
+    ) -> Result<Self, StorageError> {
+        if left_revision == right_revision {
+            return Err(StorageError::Invariant(
+                "overlap requires distinct revisions",
+            ));
+        }
+        Ok(Self {
+            id,
+            left_revision,
+            right_revision,
+            detail: valid_event_value(detail.into(), "overlap detail")?,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1021,6 +1052,13 @@ impl SqliteRepository {
                  kind TEXT NOT NULL CHECK(kind IN ('task-decomposition', 'related-to')),
                  PRIMARY KEY(source_change_id, target_change_id, kind),
                  CHECK(source_change_id <> target_change_id)
+             );
+             CREATE TABLE IF NOT EXISTS overlaps (
+                 overlap_id TEXT PRIMARY KEY NOT NULL,
+                 left_revision_id TEXT NOT NULL REFERENCES revisions(revision_id) ON DELETE RESTRICT,
+                 right_revision_id TEXT NOT NULL REFERENCES revisions(revision_id) ON DELETE RESTRICT,
+                 detail TEXT NOT NULL,
+                 CHECK(left_revision_id <> right_revision_id)
              );
              CREATE TABLE IF NOT EXISTS dependencies (
                  upstream_change_id TEXT NOT NULL REFERENCES changes(change_id) ON DELETE RESTRICT,
@@ -2260,6 +2298,20 @@ impl SqliteRepository {
         transaction.commit()?;
         Ok(())
     }
+
+    /// Persists a non-conclusive overlap signal for two exact existing revisions.
+    /// # Errors
+    /// Returns an error for missing revisions or duplicate overlap identity.
+    pub fn record_overlap(&mut self, overlap: &Overlap) -> Result<(), StorageError> {
+        let inserted = self.connection.execute(
+            "INSERT OR IGNORE INTO overlaps(overlap_id, left_revision_id, right_revision_id, detail) VALUES (?1, ?2, ?3, ?4)",
+            params![overlap.id.as_str(), overlap.left_revision.as_str(), overlap.right_revision.as_str(), overlap.detail],
+        )?;
+        if inserted == 0 {
+            return Err(StorageError::DuplicateOverlap(overlap.id.clone()));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -2307,6 +2359,7 @@ pub enum StorageError {
     ConflictCandidateMismatch,
     DuplicateChangeRelation,
     CandidateStackMismatch,
+    DuplicateOverlap(OverlapId),
     StaleStackVersion {
         expected: i64,
         actual: i64,
@@ -2435,6 +2488,7 @@ impl Display for StorageError {
             Self::CandidateStackMismatch => {
                 formatter.write_str("candidate inputs do not match stack version")
             }
+            Self::DuplicateOverlap(id) => write!(formatter, "duplicate overlap: {}", id.as_str()),
             Self::StaleStackVersion { expected, actual } => write!(
                 formatter,
                 "stale stack version: expected {expected}, actual {actual}"
@@ -3760,6 +3814,47 @@ mod tests {
                     .get::<_, i64>(0))
                 .unwrap(),
             2
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn persists_exact_revision_overlap_signal() {
+        let root = temporary_directory();
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let artifact = artifact(&store);
+        let mut repository = SqliteRepository::open(root.join("weft.sqlite"), store).unwrap();
+        let left = ChangeId::new("left").unwrap();
+        let right = ChangeId::new("right").unwrap();
+        let left_revision = RevisionId::new("left-r1").unwrap();
+        let right_revision = RevisionId::new("right-r1").unwrap();
+        repository.create_change(left.clone()).unwrap();
+        repository.create_change(right.clone()).unwrap();
+        repository
+            .append_revision(&left, None, left_revision.clone(), &artifact)
+            .unwrap();
+        repository
+            .append_revision(&right, None, right_revision.clone(), &artifact)
+            .unwrap();
+        let overlap = Overlap::new(
+            OverlapId::new("overlap-1").unwrap(),
+            left_revision,
+            right_revision,
+            "src/lib.rs",
+        )
+        .unwrap();
+        repository.record_overlap(&overlap).unwrap();
+        assert!(matches!(
+            repository.record_overlap(&overlap),
+            Err(StorageError::DuplicateOverlap(_))
+        ));
+        assert_eq!(
+            repository
+                .connection
+                .query_row("SELECT detail FROM overlaps", [], |row| row
+                    .get::<_, String>(0))
+                .unwrap(),
+            "src/lib.rs"
         );
         fs::remove_dir_all(root).unwrap();
     }

@@ -54,6 +54,7 @@ domain_id!(IntegrationReceiptId);
 domain_id!(StackId);
 domain_id!(ConflictId);
 domain_id!(ReconciliationId);
+domain_id!(OverlapId);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BaseState {
