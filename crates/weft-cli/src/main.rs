@@ -3,7 +3,9 @@
 use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use weft_domain::{Assignment, AssignmentId, ChangeId, ContentStore, RevisionId, SqliteRepository};
+use weft_domain::{
+    Assignment, AssignmentId, ChangeId, ContentStore, Dependency, RevisionId, SqliteRepository,
+};
 use weft_native_git::NativeGitRepository;
 
 const SCHEMA_VERSION: u8 = 1;
@@ -83,6 +85,9 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
         arguments.drain(0..2);
         return acquire(&mut repository, &change, &mut arguments);
     }
+    if arguments.len() == 4 && arguments[0] == "dependency" && arguments[1] == "add" {
+        return add_dependency(&mut repository, &arguments[2], &arguments[3]);
+    }
     match arguments.as_slice() {
         [command] if command == "status" => Ok(format!(
             "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"status\",\"stateDirectory\":\"{}\"}}",
@@ -115,6 +120,30 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
             "expected `status`, `change create <id>`, or `change show <id>`",
         )),
     }
+}
+
+fn add_dependency(
+    repository: &mut SqliteRepository,
+    upstream: &str,
+    downstream: &str,
+) -> Result<String, CliError> {
+    let (upstream_change, upstream_revision) = upstream
+        .split_once('@')
+        .ok_or_else(|| CliError::usage("upstream must be <change-id>@<revision-id>"))?;
+    let dependency = Dependency::new(
+        ChangeId::new(upstream_change).map_err(|error| CliError::usage(error.to_string()))?,
+        RevisionId::new(upstream_revision).map_err(|error| CliError::usage(error.to_string()))?,
+        ChangeId::new(downstream).map_err(|error| CliError::usage(error.to_string()))?,
+    );
+    repository
+        .add_dependency(&dependency)
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    Ok(format!(
+        "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"dependency\",\"upstreamChangeId\":\"{}\",\"upstreamRevisionId\":\"{}\",\"downstreamChangeId\":\"{}\"}}",
+        escape(dependency.upstream_change_id().as_str()),
+        escape(dependency.upstream_revision_id().as_str()),
+        escape(dependency.downstream_change_id().as_str())
+    ))
 }
 
 fn assign(
