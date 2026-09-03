@@ -8,13 +8,13 @@ pub use artifact::{ArtifactError, FileMode, PathOperation, TreeDelta, sha256_dig
 pub use change::{
     AssignmentId, BaseState, CandidateId, CanonicalArtifact, Change, ChangeError, ChangeId,
     ChangeRevision, ConflictId, IntegrationId, IntegrationReceiptId, MaterializationId,
-    NewRevision, OperationId, RepositoryId, ReviewRequestId, ReviewSubmissionId, RevisionId,
-    StackId, ValidationResultId, WorkspaceId,
+    NewRevision, OperationId, ReconciliationId, RepositoryId, ReviewRequestId, ReviewSubmissionId,
+    RevisionId, StackId, ValidationResultId, WorkspaceId,
 };
 pub use storage::{
     Assignment, AuditEvent, CandidateInput, CompositionCandidate, ContentStore, Dependency,
     DomainEvent, IntegrationAttempt, IntegrationConflict, IntegrationReceipt, IntegrationState,
-    Lease, Materialization, MaterializationState, ReviewOutcome, ReviewRequest, ReviewSubmission,
-    SqliteRepository, StackVersion, StorageError, StoredChange, Target, ValidationResult,
-    ValidationStatus,
+    Lease, Materialization, MaterializationState, ReconciliationRecord, ReviewOutcome,
+    ReviewRequest, ReviewSubmission, SqliteRepository, StackVersion, StorageError, StoredChange,
+    Target, ValidationResult, ValidationStatus,
 };

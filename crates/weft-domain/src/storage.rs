@@ -12,11 +12,12 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use crate::artifact::{PathOperation, is_sha256_digest, sha256_digest};
 use crate::{
     AssignmentId, BaseState, CandidateId, CanonicalArtifact, ChangeError, ChangeId, ConflictId,
-    IntegrationId, IntegrationReceiptId, MaterializationId, OperationId, RepositoryId,
-    ReviewRequestId, ReviewSubmissionId, RevisionId, StackId, ValidationResultId, WorkspaceId,
+    IntegrationId, IntegrationReceiptId, MaterializationId, OperationId, ReconciliationId,
+    RepositoryId, ReviewRequestId, ReviewSubmissionId, RevisionId, StackId, ValidationResultId,
+    WorkspaceId,
 };
 
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 static NEXT_TEMPORARY_OBJECT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
@@ -223,6 +224,36 @@ pub struct IntegrationConflict {
     resolver: Option<String>,
     resulting_target: Option<String>,
     validation_evidence: Option<String>,
+}
+
+/// Immutable evidence captured while reconciling an uncertain provider operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReconciliationRecord {
+    id: ReconciliationId,
+    integration_id: IntegrationId,
+    observed_state: String,
+    evidence: String,
+    resolved: bool,
+}
+
+impl ReconciliationRecord {
+    /// # Errors
+    /// Returns an error for invalid reconciliation metadata.
+    pub fn new(
+        id: ReconciliationId,
+        integration_id: IntegrationId,
+        observed_state: impl Into<String>,
+        evidence: impl Into<String>,
+        resolved: bool,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            id,
+            integration_id,
+            observed_state: valid_event_value(observed_state.into(), "observed state")?,
+            evidence: valid_event_value(evidence.into(), "reconciliation evidence")?,
+            resolved,
+        })
+    }
 }
 impl IntegrationConflict {
     /// # Errors
@@ -964,6 +995,11 @@ impl SqliteRepository {
                  candidate_id TEXT NOT NULL REFERENCES candidates(candidate_id) ON DELETE RESTRICT,
                  provider_state TEXT NOT NULL, attempted_operation TEXT NOT NULL,
                  resolver TEXT NULL, resulting_target TEXT NULL, validation_evidence TEXT NULL
+             );
+             CREATE TABLE IF NOT EXISTS reconciliation_records (
+                 reconciliation_id TEXT PRIMARY KEY NOT NULL,
+                 integration_id TEXT NOT NULL REFERENCES integration_attempts(integration_id) ON DELETE RESTRICT,
+                 observed_state TEXT NOT NULL, evidence TEXT NOT NULL, resolved INTEGER NOT NULL
              );
              CREATE TABLE IF NOT EXISTS dependencies (
                  upstream_change_id TEXT NOT NULL REFERENCES changes(change_id) ON DELETE RESTRICT,
@@ -2057,6 +2093,34 @@ impl SqliteRepository {
         }
         self.connection.execute("INSERT INTO integration_conflicts(conflict_id, integration_id, candidate_id, provider_state, attempted_operation, resolver, resulting_target, validation_evidence) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", params![conflict.id.as_str(), conflict.integration_id.as_str(), conflict.candidate_id.as_str(), conflict.provider_state, conflict.attempted_operation, conflict.resolver, conflict.resulting_target, conflict.validation_evidence])?;
         self.connection.execute("UPDATE integration_attempts SET state = 'conflicted' WHERE integration_id = ?1 AND state = 'running'", [conflict.integration_id.as_str()])?;
+        Ok(())
+    }
+
+    /// Records reconciliation evidence for a running or terminal integration attempt.
+    /// # Errors
+    /// Returns an error if the referenced attempt is absent or the record ID is duplicated.
+    pub fn record_reconciliation(
+        &mut self,
+        record: &ReconciliationRecord,
+    ) -> Result<(), StorageError> {
+        let exists = self
+            .connection
+            .query_row(
+                "SELECT 1 FROM integration_attempts WHERE integration_id = ?1",
+                [record.integration_id.as_str()],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !exists {
+            return Err(StorageError::MissingIntegration(
+                record.integration_id.clone(),
+            ));
+        }
+        self.connection.execute(
+            "INSERT INTO reconciliation_records(reconciliation_id, integration_id, observed_state, evidence, resolved) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![record.id.as_str(), record.integration_id.as_str(), record.observed_state, record.evidence, record.resolved],
+        )?;
         Ok(())
     }
 }
@@ -3323,6 +3387,73 @@ mod tests {
                 ))
                 .unwrap(),
             1
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn persists_reconciliation_evidence_for_an_exact_attempt() {
+        let root = temporary_directory();
+        let database = root.join("weft.sqlite");
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let artifact = artifact(&store);
+        let change = ChangeId::new("change-1").unwrap();
+        let revision = RevisionId::new("revision-1").unwrap();
+        let candidate = CandidateId::new("candidate-1").unwrap();
+        let integration = IntegrationId::new("integration-1").unwrap();
+        {
+            let mut repository = SqliteRepository::open(&database, store.clone()).unwrap();
+            repository.create_change(change.clone()).unwrap();
+            repository
+                .append_revision(&change, None, revision.clone(), &artifact)
+                .unwrap();
+            repository
+                .create_candidate(
+                    candidate.clone(),
+                    artifact.base().clone(),
+                    vec![CandidateInput::new(change, revision)],
+                )
+                .unwrap();
+            repository
+                .plan_integration(
+                    &IntegrationAttempt::new(
+                        integration.clone(),
+                        RepositoryId::new("repo-1").unwrap(),
+                        candidate,
+                        "main",
+                        "target-r1",
+                        "native-git",
+                        "merge",
+                        OperationId::new("operation-1").unwrap(),
+                        "agent-1",
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            repository
+                .record_reconciliation(
+                    &ReconciliationRecord::new(
+                        ReconciliationId::new("reconciliation-1").unwrap(),
+                        integration.clone(),
+                        "provider response uncertain",
+                        "target requires inspection",
+                        false,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+        }
+        let repository = SqliteRepository::open(&database, store).unwrap();
+        assert_eq!(
+            repository
+                .connection
+                .query_row(
+                    "SELECT observed_state FROM reconciliation_records WHERE integration_id = ?1",
+                    [integration.as_str()],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            "provider response uncertain"
         );
         fs::remove_dir_all(root).unwrap();
     }
