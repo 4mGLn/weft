@@ -137,6 +137,9 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
         arguments.drain(0..2);
         return plan_integration(&mut repository, &id, &mut arguments);
     }
+    if arguments.len() == 2 && arguments[0] == "history" {
+        return history(&repository, &arguments[1]);
+    }
     match arguments.as_slice() {
         [command] if command == "status" => Ok(format!(
             "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"status\",\"stateDirectory\":\"{}\"}}",
@@ -169,6 +172,29 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
             "expected `status`, `change create <id>`, or `change show <id>`",
         )),
     }
+}
+
+fn history(repository: &SqliteRepository, change: &str) -> Result<String, CliError> {
+    let change = ChangeId::new(change).map_err(|error| CliError::usage(error.to_string()))?;
+    let events = repository
+        .audit_events(&change)
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    let events = events
+        .iter()
+        .map(|event| {
+            format!(
+                "{{\"eventId\":{},\"kind\":\"{}\",\"detail\":\"{}\"}}",
+                event.event_id(),
+                escape(event.kind()),
+                escape(event.detail())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    Ok(format!(
+        "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"history\",\"changeId\":\"{}\",\"events\":[{events}]}}",
+        escape(change.as_str())
+    ))
 }
 
 fn plan_integration(
