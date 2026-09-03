@@ -20,6 +20,18 @@ use crate::{
 const SCHEMA_VERSION: i64 = 13;
 static NEXT_TEMPORARY_OBJECT: AtomicU64 = AtomicU64::new(0);
 
+type IntegrationAttemptRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+);
+
 #[derive(Clone, Debug)]
 pub struct ContentStore {
     root: PathBuf,
@@ -2144,9 +2156,60 @@ impl SqliteRepository {
     }
 
     /// Plans a provider-neutral integration from a fresh immutable candidate.
+    ///
+    /// Retrying the exact same operation ID returns its durable attempt, including a
+    /// running attempt that requires reconciliation, rather than creating another
+    /// provider operation.
     /// # Errors
-    /// Returns an error for a stale/missing candidate or reused operation ID.
-    pub fn plan_integration(&mut self, attempt: &IntegrationAttempt) -> Result<(), StorageError> {
+    /// Returns an error for a stale/missing candidate or mismatched operation-ID reuse.
+    pub fn plan_integration(
+        &mut self,
+        attempt: &IntegrationAttempt,
+    ) -> Result<IntegrationAttempt, StorageError> {
+        let existing: Option<IntegrationAttemptRow> = self.connection.query_row(
+            "SELECT integration_id, repository_id, candidate_id, target_ref, expected_target_revision, provider, strategy, actor, state FROM integration_attempts WHERE operation_id = ?1",
+            [attempt.operation_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?)),
+        ).optional()?;
+        if let Some((
+            id,
+            repository_id,
+            candidate_id,
+            target_ref,
+            expected_target_revision,
+            provider,
+            strategy,
+            actor,
+            state,
+        )) = existing
+        {
+            let stored = IntegrationAttempt {
+                id: IntegrationId::new(id)?,
+                repository_id: RepositoryId::new(repository_id)?,
+                candidate_id: CandidateId::new(candidate_id)?,
+                target_ref,
+                expected_target_revision,
+                provider,
+                strategy,
+                operation_id: attempt.operation_id.clone(),
+                actor,
+                state: IntegrationState::parse(&state)?,
+            };
+            if stored.id != attempt.id
+                || stored.repository_id != attempt.repository_id
+                || stored.candidate_id != attempt.candidate_id
+                || stored.target_ref != attempt.target_ref
+                || stored.expected_target_revision != attempt.expected_target_revision
+                || stored.provider != attempt.provider
+                || stored.strategy != attempt.strategy
+                || stored.actor != attempt.actor
+            {
+                return Err(StorageError::OperationReuseMismatch(
+                    attempt.operation_id.clone(),
+                ));
+            }
+            return Ok(stored);
+        }
         if self.candidate_is_stale(&attempt.candidate_id)? {
             return Err(StorageError::StaleCandidate(attempt.candidate_id.clone()));
         }
@@ -2155,11 +2218,9 @@ impl SqliteRepository {
             params![attempt.id.as_str(), attempt.repository_id.as_str(), attempt.candidate_id.as_str(), attempt.target_ref, attempt.expected_target_revision, attempt.provider, attempt.strategy, attempt.operation_id.as_str(), attempt.actor],
         )?;
         if inserted == 0 {
-            return Err(StorageError::DuplicateOperation(
-                attempt.operation_id.clone(),
-            ));
+            return Err(StorageError::DuplicateIntegration(attempt.id.clone()));
         }
-        Ok(())
+        Ok(attempt.clone())
     }
 
     /// Starts only a planned attempt when the provider-observed target is still exact.
@@ -2500,6 +2561,8 @@ pub enum StorageError {
     DuplicateReviewSubmission(ReviewSubmissionId),
     DuplicateValidationResult(ValidationResultId),
     DuplicateOperation(OperationId),
+    DuplicateIntegration(IntegrationId),
+    OperationReuseMismatch(OperationId),
     DuplicateCandidateInput(ChangeId),
     DuplicateDependency,
     MissingChange(ChangeId),
@@ -2602,6 +2665,16 @@ impl Display for StorageError {
             }
             Self::DuplicateOperation(id) => {
                 write!(formatter, "duplicate operation: {}", id.as_str())
+            }
+            Self::DuplicateIntegration(id) => {
+                write!(formatter, "duplicate integration: {}", id.as_str())
+            }
+            Self::OperationReuseMismatch(id) => {
+                write!(
+                    formatter,
+                    "operation ID reused for a different attempt: {}",
+                    id.as_str()
+                )
             }
             Self::DuplicateCandidateInput(id) => {
                 write!(
@@ -3877,10 +3950,7 @@ mod tests {
                 )
                 .unwrap();
             repository.plan_integration(&attempt).unwrap();
-            assert!(matches!(
-                repository.plan_integration(&attempt),
-                Err(StorageError::DuplicateOperation(_))
-            ));
+            assert_eq!(repository.plan_integration(&attempt).unwrap(), attempt);
             assert!(matches!(
                 repository.start_integration(&integration_id, "target-r2", 100),
                 Err(StorageError::StaleTarget { .. })
@@ -3902,6 +3972,10 @@ mod tests {
                 .start_integration(&integration_id, "target-r1", 100)
                 .unwrap();
             assert_integration_started_event(&repository.connection);
+            assert_eq!(
+                repository.plan_integration(&attempt).unwrap().state(),
+                IntegrationState::Running
+            );
             assert!(matches!(
                 repository.finish_integration(&integration_id, IntegrationState::Succeeded, None),
                 Err(StorageError::SuccessRequiresReceipt)
@@ -4022,6 +4096,59 @@ mod tests {
             "running"
         );
         assert_integration_started_event(&repository.connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_operation_id_reuse_for_a_different_integration() {
+        let root = temporary_directory();
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let artifact = artifact(&store);
+        let mut repository = SqliteRepository::open(root.join("weft.sqlite"), store).unwrap();
+        let change = ChangeId::new("change-1").unwrap();
+        let revision = RevisionId::new("revision-1").unwrap();
+        let candidate = CandidateId::new("candidate-1").unwrap();
+        repository.create_change(change.clone()).unwrap();
+        repository
+            .append_revision(&change, None, revision.clone(), &artifact)
+            .unwrap();
+        repository
+            .create_candidate(
+                candidate.clone(),
+                artifact.base().clone(),
+                vec![CandidateInput::new(change, revision)],
+            )
+            .unwrap();
+        let operation = OperationId::new("operation-1").unwrap();
+        let original = IntegrationAttempt::new(
+            IntegrationId::new("integration-1").unwrap(),
+            RepositoryId::new("repo-1").unwrap(),
+            candidate.clone(),
+            "main",
+            "target-r1",
+            "native-git",
+            "merge",
+            operation.clone(),
+            "agent-1",
+        )
+        .unwrap();
+        repository.plan_integration(&original).unwrap();
+        let mismatched = IntegrationAttempt::new(
+            IntegrationId::new("integration-2").unwrap(),
+            RepositoryId::new("repo-1").unwrap(),
+            candidate,
+            "main",
+            "target-r2",
+            "native-git",
+            "merge",
+            operation,
+            "agent-1",
+        )
+        .unwrap();
+        assert!(matches!(
+            repository.plan_integration(&mismatched),
+            Err(StorageError::OperationReuseMismatch(_))
+        ));
         fs::remove_dir_all(root).unwrap();
     }
 
