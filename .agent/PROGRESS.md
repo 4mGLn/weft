@@ -76,12 +76,14 @@ Phase 7 — Multi-agent workflows.
 - Completed Phase 6 Paseo integration acceptance: the reusable bridge maps
   Paseo actions to ordinary durable Weft leases, handoffs, and history without
   making the Paseo daemon a state or scheduling dependency.
+- Completed Phase 7 multi-agent workflow acceptance: durable dependency-aware
+  execution, review/resolution, validation, composition, and integration-order
+  requests are published without turning Weft into an agent process scheduler.
 
 ## Next checkpoint
 
-Publish dependency-aware multi-agent workflow requests, reviewer/resolver
-assignment, validation pipelines, composition planning, and integration ordering
-without implementing agent process scheduling.
+All roadmap phases are complete. Continue only with a new product request,
+provider capability, release decision, or identified verification gap.
 
 ## Known gaps
 

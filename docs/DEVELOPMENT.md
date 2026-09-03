@@ -22,6 +22,8 @@ The stable `make check` gate explicitly tests the active Rust host target so a d
 The current local CLI contract is documented in [CLI v1](CLI.md).
 The provider-neutral runtime contract is documented in the [Agent Protocol v1](AGENT_PROTOCOL.md);
 run `make phase5-resume` to reproduce its separate-session resume proof.
+The orchestrator-facing ordering and blocking contract is documented in
+[Multi-Agent Workflows v1](MULTI_AGENT_WORKFLOWS.md).
 
 ## Work lifecycle
 
