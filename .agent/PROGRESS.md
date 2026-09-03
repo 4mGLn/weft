@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 5 — Agent protocol.
+Phase 6 — Paseo integration.
 
 ## Completed
 
@@ -70,11 +70,14 @@ Phase 5 — Agent protocol.
   the durable domain lifecycle and the complete Native Git plan/run/reconcile
   path, with explicit confirmations, operation IDs, exact targets, and stable
   JSON/exit-code compatibility evidence.
+- Completed Phase 5 agent protocol acceptance: provider-neutral operations and
+  explicit recovery errors are published, and a fresh CLI runtime resumes an
+  exact canonical revision from durable state after the originating process ends.
 
 ## Next checkpoint
 
-Publish the provider-neutral agent operation protocol and prove a terminated
-session can resume exact canonical revision work from durable state.
+Define the Phase 6 Paseo integration boundary while keeping the Weft API and
+CLI independently operable.
 
 ## Known gaps
 
