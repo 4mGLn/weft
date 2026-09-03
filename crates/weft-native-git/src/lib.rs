@@ -520,19 +520,28 @@ impl NativeGitRepository {
             }
             return Err(error);
         }
-        let actual = self.resolve_commit(target_ref)?;
-        if actual != result_commit {
-            return Err(NativeGitError::UncertainTarget {
-                expected_result: result_commit,
-                actual,
-            });
-        }
+        let actual = self.verify_target_result(target_ref, &result_commit)?;
         Ok(NativeGitIntegrationReceipt {
             target_ref: target_ref.to_owned(),
             prior_target: expected_target.to_owned(),
             result_commit: actual,
             result_tree: tree_id.to_owned(),
         })
+    }
+
+    fn verify_target_result(
+        &self,
+        target_ref: &str,
+        expected_result: &str,
+    ) -> Result<String, NativeGitError> {
+        let actual = self.resolve_commit(target_ref)?;
+        if actual != expected_result {
+            return Err(NativeGitError::UncertainTarget {
+                expected_result: expected_result.to_owned(),
+                actual,
+            });
+        }
+        Ok(actual)
     }
 
     /// Executes one persisted integration attempt against its exact candidate.
@@ -1342,6 +1351,11 @@ mod tests {
             .status()
             .unwrap();
         assert!(status.success());
+        assert!(matches!(
+            repository.verify_target_result("refs/heads/target", receipt.result_commit()),
+            Err(NativeGitError::UncertainTarget { expected_result, actual })
+                if expected_result == receipt.result_commit() && actual == external
+        ));
         assert!(matches!(
             repository.integrate_tree(
                 "refs/heads/target",
