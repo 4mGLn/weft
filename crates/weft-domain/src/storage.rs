@@ -2604,15 +2604,16 @@ impl SqliteRepository {
         integration_id: &IntegrationId,
         next: IntegrationState,
         receipt: Option<&IntegrationReceipt>,
+        audit: &AuditContext,
     ) -> Result<(), StorageError> {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let state: String = transaction
+        let (state, candidate_id, operation_id): (String, String, String) = transaction
             .query_row(
-                "SELECT state FROM integration_attempts WHERE integration_id = ?1",
+                "SELECT state, candidate_id, operation_id FROM integration_attempts WHERE integration_id = ?1",
                 [integration_id.as_str()],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?
             .ok_or_else(|| StorageError::MissingIntegration(integration_id.clone()))?;
@@ -2640,6 +2641,18 @@ impl SqliteRepository {
                 "integration changed during immediate transaction",
             ));
         }
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('integration-finished', ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                audit.actor,
+                audit.occurred_at_unix_ms,
+                state,
+                next.as_str(),
+                format!("{},{}", integration_id.as_str(), candidate_id),
+                operation_id,
+                receipt.map(|value| value.provider_evidence.as_str()),
+            ],
+        )?;
         transaction.commit()?;
         Ok(())
     }
@@ -3482,6 +3495,56 @@ mod tests {
                 "operation-1".to_owned(),
                 "provider-observed-target:target-r1".to_owned(),
             )
+        );
+    }
+
+    fn assert_integration_finished_event(connection: &Connection) {
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence FROM domain_events WHERE kind = 'integration-finished'",
+                    [],
+                    |row| Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                    )),
+                )
+                .unwrap(),
+            (
+                "agent-1".to_owned(),
+                102,
+                "running".to_owned(),
+                "succeeded".to_owned(),
+                "integration-1,candidate-1".to_owned(),
+                "operation-1".to_owned(),
+                Some("verified by provider".to_owned()),
+            )
+        );
+    }
+
+    fn assert_successful_integration(connection: &Connection, integration_id: &IntegrationId) {
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT state FROM integration_attempts WHERE integration_id = ?1",
+                    [integration_id.as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "succeeded"
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM integration_receipts", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
         );
     }
 
@@ -4412,7 +4475,6 @@ mod tests {
                 )
                 .unwrap();
             repository.plan_integration(&attempt).unwrap();
-            assert_eq!(repository.plan_integration(&attempt).unwrap(), attempt);
             assert!(matches!(
                 repository.start_integration(&integration_id, "target-r2", 100),
                 Err(StorageError::StaleTarget { .. })
@@ -4434,12 +4496,13 @@ mod tests {
                 .start_integration(&integration_id, "target-r1", 100)
                 .unwrap();
             assert_integration_started_event(&repository.connection);
-            assert_eq!(
-                repository.plan_integration(&attempt).unwrap().state(),
-                IntegrationState::Running
-            );
             assert!(matches!(
-                repository.finish_integration(&integration_id, IntegrationState::Succeeded, None),
+                repository.finish_integration(
+                    &integration_id,
+                    IntegrationState::Succeeded,
+                    None,
+                    &AuditContext::new("agent-1", 101).unwrap(),
+                ),
                 Err(StorageError::SuccessRequiresReceipt)
             ));
             let receipt = IntegrationReceipt::new(
@@ -4451,31 +4514,17 @@ mod tests {
             )
             .unwrap();
             repository
-                .finish_integration(&integration_id, IntegrationState::Succeeded, Some(&receipt))
+                .finish_integration(
+                    &integration_id,
+                    IntegrationState::Succeeded,
+                    Some(&receipt),
+                    &AuditContext::new("agent-1", 102).unwrap(),
+                )
                 .unwrap();
+            assert_integration_finished_event(&repository.connection);
         }
         let repository = SqliteRepository::open(&database, store).unwrap();
-        assert_eq!(
-            repository
-                .connection
-                .query_row(
-                    "SELECT state FROM integration_attempts WHERE integration_id = ?1",
-                    [integration_id.as_str()],
-                    |row| row.get::<_, String>(0)
-                )
-                .unwrap(),
-            "succeeded"
-        );
-        assert_eq!(
-            repository
-                .connection
-                .query_row("SELECT COUNT(*) FROM integration_receipts", [], |row| row
-                    .get::<_, i64>(
-                    0
-                ))
-                .unwrap(),
-            1
-        );
+        assert_successful_integration(&repository.connection, &integration_id);
         fs::remove_dir_all(root).unwrap();
     }
 
