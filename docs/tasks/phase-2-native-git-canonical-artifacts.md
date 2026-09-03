@@ -3,8 +3,8 @@
 ## Outcome and scope
 
 - **User/operator result:** A local Git commit range can be captured into durable, provider-independent content and reconstructed in an isolated detached worktree at its recorded base.
-- **In scope:** Repository discovery, exact commit resolution, `tree-delta-v1` capture from Git tree objects, CAS blob persistence, detached-worktree reconstruction, changed-path overlap inspection, and ordered artifact composition.
-- **Out of scope:** Target CAS/integration, provider receipts, durable conflict records, reconciliation, public CLI, and Windows materialization.
+- **In scope:** Repository discovery, exact commit resolution, `tree-delta-v1` capture from Git tree objects, CAS blob persistence, detached-worktree reconstruction, changed-path overlap inspection, ordered artifact composition, and guarded target integration receipts.
+- **Out of scope:** Durable conflict records, reconciliation, public CLI, and Windows materialization.
 - **Affected domain invariants:** Revision content remains exact-base-bound and locally durable; provider object IDs supplement rather than replace canonical artifacts; a materialization starts from an exact base.
 - **Provider/runtime scope:** Native Git plumbing only. Capture is read-only; materialization explicitly creates a Git detached worktree and stages its reconstructed tree.
 - **Compatibility surface:** API | artifact | provider | storage
@@ -15,6 +15,7 @@
 2. Capture represents additions, modifications, type changes, and deletions as sorted `tree-delta-v1` operations; unsupported modes fail explicitly.
 3. Materialization rejects a foreign or unresolvable base and produces a detached base worktree whose staged tree equals the captured target tree.
 4. Composition reconstructs disjoint ordered artifacts and reports base-relative overlapping paths without inventing a merge result.
+5. Integration creates a result commit from a verified tree, compare-and-swaps the expected target, and verifies the observed result before issuing a receipt.
 
 ## Risks
 
@@ -35,21 +36,22 @@
 2. Capture canonical delta and CAS blobs — proof: provider test covers binary bytes, deletion, executable mode, and raw-byte symlink target.
 3. Reconstruct detached worktree — proof: test stages materialization and compares its Git tree ID to the target commit tree.
 4. Compose exact artifacts — proof: provider test verifies a combined tree and explicit ambiguous-path conflict.
+5. Advance target by CAS — proof: provider test verifies parent/tree receipt and external-target rejection without replacement.
 
 ## Validation record
 
 | Check | Command/test | Result | Evidence |
 | --- | --- | --- | --- |
-| Focused | `cargo test -p weft-native-git` | Passed | Discovery, target guard, capture, CAS reopen, reconstruction, overlap, and composition tests. |
-| Domain/contract | `cargo test --workspace --all-targets` | Passed | 37 domain tests plus 4 Native Git tests. |
+| Focused | `cargo test -p weft-native-git` | Passed | Discovery, target guard, capture, CAS reopen, reconstruction, overlap, composition, and target-CAS tests. |
+| Domain/contract | `cargo test --workspace --all-targets` | Passed | 37 domain tests plus 5 Native Git tests. |
 | Concurrency/recovery | Existing restart test in `weft-domain` | Passed | Provider mutation/reconciliation recovery remains pending. |
-| Provider integration | Native Git temporary repository tests | Passed | Materialized staged tree ID equals exact target tree ID; disjoint artifacts compose; ambiguous overlaps return explicit paths. |
+| Provider integration | Native Git temporary repository tests | Passed | Materialized staged tree ID equals exact target tree ID; disjoint artifacts compose; target CAS returns a verified receipt and rejects external divergence. |
 | Static/harness | `make check` | Passed | Harness, documentation links, formatting, tests, and strict Clippy. |
 | Package/deployment | Not run | Unavailable by scope | Packaging is a later phase. |
 
 ## Decision and follow-up
 
 - **Decision and alternatives rejected:** Capture Git trees and blobs via plumbing, then store only canonical paths/modes/CAS digests. Rejected retaining binary patches or Git commit IDs as durable revision content.
-- **Residual risks:** Process deadlines/output caps, non-UTF-8 paths, submodules, integration, durable conflict mapping, and reconciliation remain unimplemented.
+- **Residual risks:** Process deadlines/output caps, non-UTF-8 paths, submodules, durable integration orchestration/conflict mapping, and reconciliation remain unimplemented.
 - **Unavailable evidence:** Windows file-mode/symlink behavior and crash injection during real provider mutations.
-- **Follow-up, owner, resumption condition:** Primary agent continues Phase 2 with guarded target updates, receipts, durable conflict records, and reconciliation; each provider mutation needs failure and crash evidence.
+- **Follow-up, owner, resumption condition:** Primary agent connects guarded provider mutation to durable integration attempts, then adds durable conflict records and reconciliation; each provider mutation needs failure and crash evidence.

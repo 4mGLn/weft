@@ -29,6 +29,34 @@ pub struct NativeGitMaterialization {
     tree_id: String,
 }
 
+/// Provider evidence returned only after a target compare-and-swap is verified.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativeGitIntegrationReceipt {
+    target_ref: String,
+    prior_target: String,
+    result_commit: String,
+    result_tree: String,
+}
+
+impl NativeGitIntegrationReceipt {
+    #[must_use]
+    pub fn target_ref(&self) -> &str {
+        &self.target_ref
+    }
+    #[must_use]
+    pub fn prior_target(&self) -> &str {
+        &self.prior_target
+    }
+    #[must_use]
+    pub fn result_commit(&self) -> &str {
+        &self.result_commit
+    }
+    #[must_use]
+    pub fn result_tree(&self) -> &str {
+        &self.result_tree
+    }
+}
+
 impl NativeGitMaterialization {
     #[must_use]
     pub fn path(&self) -> &Path {
@@ -395,6 +423,80 @@ impl NativeGitRepository {
         }
         Ok(materialization)
     }
+
+    /// Commits a verified tree and atomically advances one target ref.
+    ///
+    /// This operation never retries a failed compare-and-swap. Callers must
+    /// reconcile an uncertain result instead of reporting success.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NativeGitError::TargetMismatch`] without mutating the target
+    /// when its observed commit is not `expected_target`. A successful CAS
+    /// followed by a different observed target is uncertain, not successful.
+    pub fn integrate_tree(
+        &self,
+        target_ref: &str,
+        expected_target: &str,
+        tree_id: &str,
+        message: &str,
+    ) -> Result<NativeGitIntegrationReceipt, NativeGitError> {
+        if self.resolve_commit(expected_target)? != expected_target {
+            return Err(NativeGitError::InvalidBaseObject);
+        }
+        let observed = self.resolve_commit(target_ref)?;
+        if observed != expected_target {
+            return Err(NativeGitError::TargetMismatch {
+                expected: expected_target.to_owned(),
+                actual: observed,
+            });
+        }
+        if run_git(
+            &self.root,
+            [
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("{tree_id}^{{tree}}"),
+            ],
+        )? != tree_id
+        {
+            return Err(NativeGitError::InvalidTreeObject);
+        }
+        let result_commit = create_commit(&self.root, tree_id, expected_target, message)?;
+        if let Err(error) = run_git_bytes(
+            &self.root,
+            [
+                "update-ref",
+                "--no-deref",
+                target_ref,
+                &result_commit,
+                expected_target,
+            ],
+        ) {
+            let actual = self.resolve_commit(target_ref)?;
+            if actual != expected_target {
+                return Err(NativeGitError::TargetMismatch {
+                    expected: expected_target.to_owned(),
+                    actual,
+                });
+            }
+            return Err(error);
+        }
+        let actual = self.resolve_commit(target_ref)?;
+        if actual != result_commit {
+            return Err(NativeGitError::UncertainTarget {
+                expected_result: result_commit,
+                actual,
+            });
+        }
+        Ok(NativeGitIntegrationReceipt {
+            target_ref: target_ref.to_owned(),
+            prior_target: expected_target.to_owned(),
+            result_commit: actual,
+            result_tree: tree_id.to_owned(),
+        })
+    }
 }
 
 fn apply_artifact_operations(
@@ -447,6 +549,35 @@ fn staged_paths_against(
                 .map_err(NativeGitError::PathEncoding)
         })
         .collect()
+}
+
+fn create_commit(
+    repository: &Path,
+    tree_id: &str,
+    parent: &str,
+    message: &str,
+) -> Result<String, NativeGitError> {
+    let output = Command::new("git")
+        .args(["commit-tree", tree_id, "-p", parent, "-m", message])
+        .env("GIT_AUTHOR_NAME", "Weft")
+        .env("GIT_AUTHOR_EMAIL", "weft@localhost")
+        .env("GIT_COMMITTER_NAME", "Weft")
+        .env("GIT_COMMITTER_EMAIL", "weft@localhost")
+        .current_dir(repository)
+        .output()
+        .map_err(NativeGitError::Io)?;
+    if !output.status.success() {
+        return Err(NativeGitError::Command {
+            status: output.status.code(),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
+    }
+    let commit = String::from_utf8(output.stdout).map_err(NativeGitError::Utf8)?;
+    let commit = commit.trim().to_owned();
+    if commit.is_empty() {
+        return Err(NativeGitError::MalformedOutput);
+    }
+    Ok(commit)
 }
 
 fn remove_path(root: &Path, relative: &str) -> Result<(), NativeGitError> {
@@ -544,7 +675,10 @@ pub enum NativeGitError {
     Domain(weft_domain::ChangeError),
     Artifact(weft_domain::ArtifactError),
     Storage(weft_domain::StorageError),
-    Command { status: Option<i32>, stderr: String },
+    Command {
+        status: Option<i32>,
+        stderr: String,
+    },
     MalformedOutput,
     UnsupportedChange(String),
     UnsupportedMode(String),
@@ -555,6 +689,15 @@ pub enum NativeGitError {
     UnsupportedPlatform,
     EmptyComposition,
     CompositionConflict(Vec<String>),
+    InvalidTreeObject,
+    TargetMismatch {
+        expected: String,
+        actual: String,
+    },
+    UncertainTarget {
+        expected_result: String,
+        actual: String,
+    },
 }
 impl Display for NativeGitError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -582,6 +725,17 @@ impl Display for NativeGitError {
             Self::CompositionConflict(paths) => {
                 write!(f, "canonical artifacts conflict at: {}", paths.join(", "))
             }
+            Self::InvalidTreeObject => f.write_str("integration tree is not an exact Git tree"),
+            Self::TargetMismatch { expected, actual } => {
+                write!(f, "target changed: expected {expected}, observed {actual}")
+            }
+            Self::UncertainTarget {
+                expected_result,
+                actual,
+            } => write!(
+                f,
+                "target changed after compare-and-swap: expected {expected_result}, observed {actual}"
+            ),
         }
     }
 }
@@ -854,6 +1008,64 @@ mod tests {
             Err(NativeGitError::CompositionConflict(paths)) if paths == ["README"]
         ));
         remove_worktree(&path, &conflict_destination);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn integrates_a_tree_with_target_compare_and_swap() {
+        let path = temporary_repository();
+        let base = run_git(&path, ["rev-parse", "HEAD"]).unwrap();
+        fs::write(path.join("integrated"), "result\n").unwrap();
+        commit_files(&path, "candidate result", &["integrated"]);
+        let tree = run_git(&path, ["rev-parse", "HEAD^{tree}"]).unwrap();
+        let status = Command::new("git")
+            .args(["branch", "target", &base])
+            .current_dir(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let repository = NativeGitRepository::discover(&path).unwrap();
+        let receipt = repository
+            .integrate_tree("refs/heads/target", &base, &tree, "integrate candidate")
+            .unwrap();
+        assert_eq!(receipt.prior_target(), base);
+        assert_eq!(receipt.result_tree(), tree);
+        assert_eq!(
+            run_git(&path, ["rev-parse", "refs/heads/target"]).unwrap(),
+            receipt.result_commit()
+        );
+        assert_eq!(
+            run_git(&path, ["rev-parse", "refs/heads/target^{tree}"]).unwrap(),
+            tree
+        );
+        assert_eq!(
+            run_git(&path, ["rev-parse", "refs/heads/target^"]).unwrap(),
+            base
+        );
+
+        fs::write(path.join("external"), "advance\n").unwrap();
+        commit_files(&path, "external", &["external"]);
+        let external = run_git(&path, ["rev-parse", "HEAD"]).unwrap();
+        let status = Command::new("git")
+            .args(["update-ref", "refs/heads/target", &external])
+            .current_dir(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(matches!(
+            repository.integrate_tree(
+                "refs/heads/target",
+                receipt.result_commit(),
+                &tree,
+                "must not replace external",
+            ),
+            Err(NativeGitError::TargetMismatch { expected, actual })
+                if expected == receipt.result_commit() && actual == external
+        ));
+        assert_eq!(
+            run_git(&path, ["rev-parse", "refs/heads/target"]).unwrap(),
+            external
+        );
         fs::remove_dir_all(path).unwrap();
     }
 
