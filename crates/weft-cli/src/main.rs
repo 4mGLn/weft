@@ -4,7 +4,8 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use weft_domain::{
-    Assignment, AssignmentId, ChangeId, ContentStore, Dependency, RevisionId, SqliteRepository,
+    Assignment, AssignmentId, CandidateId, CandidateInput, ChangeId, ContentStore, Dependency,
+    RevisionId, SqliteRepository, StackId,
 };
 use weft_native_git::NativeGitRepository;
 
@@ -88,6 +89,20 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
     if arguments.len() == 4 && arguments[0] == "dependency" && arguments[1] == "add" {
         return add_dependency(&mut repository, &arguments[2], &arguments[3]);
     }
+    if arguments.len() >= 4 && arguments[0] == "stack" && arguments[1] == "create" {
+        return create_stack(&mut repository, &arguments[2], &arguments[3..]);
+    }
+    if arguments.len() >= 5 && arguments[0] == "stack" && arguments[1] == "revise" {
+        return revise_stack(
+            &mut repository,
+            &arguments[2],
+            &arguments[3],
+            &arguments[4..],
+        );
+    }
+    if arguments.len() >= 4 && arguments[0] == "candidate" && arguments[1] == "create" {
+        return create_candidate(&mut repository, &arguments[2], &arguments[3..]);
+    }
     match arguments.as_slice() {
         [command] if command == "status" => Ok(format!(
             "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"status\",\"stateDirectory\":\"{}\"}}",
@@ -120,6 +135,96 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
             "expected `status`, `change create <id>`, or `change show <id>`",
         )),
     }
+}
+
+fn create_stack(
+    repository: &mut SqliteRepository,
+    id: &str,
+    changes: &[String],
+) -> Result<String, CliError> {
+    let stack = repository
+        .create_stack(
+            StackId::new(id).map_err(|error| CliError::usage(error.to_string()))?,
+            parse_changes(changes)?,
+        )
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    Ok(stack_json(&stack))
+}
+fn revise_stack(
+    repository: &mut SqliteRepository,
+    id: &str,
+    expected: &str,
+    changes: &[String],
+) -> Result<String, CliError> {
+    let expected = expected
+        .parse()
+        .map_err(|_| CliError::usage("stack version must be an integer"))?;
+    let stack = repository
+        .revise_stack(
+            StackId::new(id).map_err(|error| CliError::usage(error.to_string()))?,
+            expected,
+            parse_changes(changes)?,
+        )
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    Ok(stack_json(&stack))
+}
+fn parse_changes(values: &[String]) -> Result<Vec<ChangeId>, CliError> {
+    values
+        .iter()
+        .map(|value| ChangeId::new(value).map_err(|error| CliError::usage(error.to_string())))
+        .collect()
+}
+fn stack_json(stack: &weft_domain::StackVersion) -> String {
+    let changes = stack
+        .changes()
+        .iter()
+        .map(|change| format!("\"{}\"", escape(change.as_str())))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"stack\",\"stackId\":\"{}\",\"version\":{},\"changeIds\":[{changes}]}}",
+        escape(stack.stack_id().as_str()),
+        stack.version()
+    )
+}
+fn create_candidate(
+    repository: &mut SqliteRepository,
+    id: &str,
+    inputs: &[String],
+) -> Result<String, CliError> {
+    let inputs = inputs
+        .iter()
+        .map(|value| parse_candidate_input(value))
+        .collect::<Result<Vec<_>, _>>()?;
+    let first = inputs
+        .first()
+        .ok_or_else(|| CliError::usage("candidate requires at least one change@revision input"))?;
+    let base = repository
+        .load_artifact_for_revision(first.revision_id())
+        .map_err(|error| CliError::domain(error.to_string()))?
+        .base()
+        .clone();
+    let candidate = repository
+        .create_candidate(
+            CandidateId::new(id).map_err(|error| CliError::usage(error.to_string()))?,
+            base,
+            inputs,
+        )
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    Ok(format!(
+        "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"candidate\",\"candidateId\":\"{}\",\"contentDigest\":\"{}\"}}",
+        escape(candidate.candidate_id().as_str()),
+        escape(candidate.content_digest())
+    ))
+}
+fn parse_candidate_input(value: &str) -> Result<CandidateInput, CliError> {
+    let (change, revision) = value
+        .split_once('@')
+        .ok_or_else(|| CliError::usage("candidate input must be <change-id>@<revision-id>"))?;
+    Ok(CandidateInput::new(
+        ChangeId::new(change).map_err(|error| CliError::usage(error.to_string()))?,
+        RevisionId::new(revision).map_err(|error| CliError::usage(error.to_string()))?,
+    ))
 }
 
 fn add_dependency(
