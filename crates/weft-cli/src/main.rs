@@ -4,8 +4,9 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use weft_domain::{
-    Assignment, AssignmentId, CandidateId, CandidateInput, ChangeId, ContentStore, Dependency,
-    RevisionId, SqliteRepository, StackId,
+    Assignment, AssignmentId, AuditContext, CandidateId, CandidateInput, ChangeId, ContentStore,
+    Dependency, MaterializationId, MaterializationState, RevisionId, SqliteRepository, StackId,
+    WorkspaceId,
 };
 use weft_native_git::NativeGitRepository;
 
@@ -103,6 +104,16 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
     if arguments.len() >= 4 && arguments[0] == "candidate" && arguments[1] == "create" {
         return create_candidate(&mut repository, &arguments[2], &arguments[3..]);
     }
+    if arguments.len() >= 3 && arguments[0] == "materialization" && arguments[1] == "create" {
+        let id = arguments.remove(2);
+        arguments.drain(0..2);
+        return create_materialization(&mut repository, &id, &mut arguments);
+    }
+    if arguments.len() >= 3 && arguments[0] == "materialization" && arguments[1] == "transition" {
+        let id = arguments.remove(2);
+        arguments.drain(0..2);
+        return transition_materialization(&mut repository, &id, &mut arguments);
+    }
     match arguments.as_slice() {
         [command] if command == "status" => Ok(format!(
             "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"status\",\"stateDirectory\":\"{}\"}}",
@@ -134,6 +145,93 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
         _ => Err(CliError::usage(
             "expected `status`, `change create <id>`, or `change show <id>`",
         )),
+    }
+}
+
+fn create_materialization(
+    repository: &mut SqliteRepository,
+    id: &str,
+    arguments: &mut Vec<String>,
+) -> Result<String, CliError> {
+    let revision = required_option(arguments, "--revision")?;
+    let workspace = required_option(arguments, "--workspace")?;
+    let provider = required_option(arguments, "--provider")?;
+    let provider_ref = required_option(arguments, "--provider-ref")?;
+    let actor = required_option(arguments, "--actor")?;
+    let at = required_i64(arguments, "--at")?;
+    if !arguments.is_empty() {
+        return Err(CliError::usage(
+            "unexpected materialization create arguments",
+        ));
+    }
+    let audit = AuditContext::new(actor, at).map_err(|error| CliError::usage(error.to_string()))?;
+    let materialization = repository
+        .create_materialization(
+            MaterializationId::new(id).map_err(|error| CliError::usage(error.to_string()))?,
+            RevisionId::new(revision).map_err(|error| CliError::usage(error.to_string()))?,
+            WorkspaceId::new(workspace).map_err(|error| CliError::usage(error.to_string()))?,
+            provider,
+            provider_ref,
+            &audit,
+        )
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    Ok(materialization_json(&materialization))
+}
+fn transition_materialization(
+    repository: &mut SqliteRepository,
+    id: &str,
+    arguments: &mut Vec<String>,
+) -> Result<String, CliError> {
+    let expected = parse_materialization_state(&required_option(arguments, "--expected-state")?)?;
+    let next = parse_materialization_state(&required_option(arguments, "--next-state")?)?;
+    let actor = required_option(arguments, "--actor")?;
+    let at = required_i64(arguments, "--at")?;
+    if !arguments.is_empty() {
+        return Err(CliError::usage(
+            "unexpected materialization transition arguments",
+        ));
+    }
+    let audit = AuditContext::new(actor, at).map_err(|error| CliError::usage(error.to_string()))?;
+    let materialization = repository
+        .transition_materialization(
+            &MaterializationId::new(id).map_err(|error| CliError::usage(error.to_string()))?,
+            expected,
+            next,
+            &audit,
+        )
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    Ok(materialization_json(&materialization))
+}
+fn parse_materialization_state(value: &str) -> Result<MaterializationState, CliError> {
+    match value {
+        "clean" => Ok(MaterializationState::Clean),
+        "dirty" => Ok(MaterializationState::Dirty),
+        "diverged" => Ok(MaterializationState::Diverged),
+        "suspended" => Ok(MaterializationState::Suspended),
+        "released" => Ok(MaterializationState::Released),
+        "invalidated" => Ok(MaterializationState::Invalidated),
+        _ => Err(CliError::usage("invalid materialization state")),
+    }
+}
+fn materialization_json(value: &weft_domain::Materialization) -> String {
+    format!(
+        "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"materialization\",\"materializationId\":\"{}\",\"revisionId\":\"{}\",\"workspaceId\":\"{}\",\"provider\":\"{}\",\"providerRef\":\"{}\",\"state\":\"{}\"}}",
+        escape(value.materialization_id().as_str()),
+        escape(value.revision_id().as_str()),
+        escape(value.workspace_id().as_str()),
+        escape(value.provider()),
+        escape(value.provider_ref()),
+        materialization_state_name(value.state())
+    )
+}
+fn materialization_state_name(value: MaterializationState) -> &'static str {
+    match value {
+        MaterializationState::Clean => "clean",
+        MaterializationState::Dirty => "dirty",
+        MaterializationState::Diverged => "diverged",
+        MaterializationState::Suspended => "suspended",
+        MaterializationState::Released => "released",
+        MaterializationState::Invalidated => "invalidated",
     }
 }
 
