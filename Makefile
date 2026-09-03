@@ -1,4 +1,4 @@
-.PHONY: check docs-check harness-check rust-check phase0-spike phase0-native-git-spike phase0-gitbutler-spike phase5-resume phase6-paseo-bridge
+.PHONY: check docs-check harness-check rust-check phase0-spike phase0-native-git-spike phase0-gitbutler-spike phase3-gitbutler-live package-release test-release test-upgrade-rollback test-release-reproducibility
 
 RUST_HOST := $(shell rustc -vV | sed -n 's/^host: //p')
 
@@ -23,8 +23,22 @@ phase0-gitbutler-spike:
 
 phase0-spike: phase0-native-git-spike phase0-gitbutler-spike
 
-phase5-resume:
-	./scripts/test-cli-session-resume.sh
+phase3-gitbutler-live:
+	cargo test -p weft-provider-gitbutler --target $(RUST_HOST) tests::live_gitbutler_0_22_stack_export_and_local_landing -- --ignored --exact --nocapture
 
-phase6-paseo-bridge:
-	./scripts/test-paseo-weft-bridge.sh
+package-release:
+	@test -n "$(VERSION)" || (echo "VERSION is required, e.g. make package-release VERSION=v0.1.0" >&2; exit 2)
+	./scripts/package-release.sh "$(VERSION)"
+
+test-release:
+	@test -n "$(ARCHIVE)" || (echo "ARCHIVE is required" >&2; exit 2)
+	./scripts/test-release.sh "$(ARCHIVE)"
+
+test-upgrade-rollback:
+	@test -n "$(FROM_ARCHIVE)" || (echo "FROM_ARCHIVE is required" >&2; exit 2)
+	@test -n "$(TO_ARCHIVE)" || (echo "TO_ARCHIVE is required" >&2; exit 2)
+	./scripts/test-upgrade-rollback.sh "$(FROM_ARCHIVE)" "$(TO_ARCHIVE)"
+
+test-release-reproducibility:
+	@test -n "$(VERSION)" || (echo "VERSION is required" >&2; exit 2)
+	./scripts/test-release-reproducibility.sh "$(VERSION)"

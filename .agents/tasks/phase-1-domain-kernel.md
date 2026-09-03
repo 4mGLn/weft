@@ -23,4 +23,4 @@
 
 ## Follow-up
 
-Add SQLite migrations and transactional repositories that persist these invariants and prove multi-process stale-head behavior.
+Completed for Change/Revision persistence in [Phase 1 SQLite Change store](phase-1-sqlite-change-store.md). Continue with the filesystem CAS and deterministic artifact serialization.

@@ -1,0 +1,4 @@
+# Weft's supported local runtime is Linux GNU. Keep direct Cargo commands from
+# inheriting a developer-wide cross-compilation target.
+[build]
+target = "x86_64-unknown-linux-gnu"

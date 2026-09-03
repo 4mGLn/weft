@@ -8,34 +8,66 @@ Run all repository checks from the root:
 make check
 ```
 
-The current gate validates the agent harness, local Markdown links, Rust formatting, workspace tests, and Clippy warnings. Provider spikes remain explicit targets because the GitButler spike requires a local GitButler installation and registry access.
+The current gate validates repository documentation, Rust formatting, workspace tests, and Clippy warnings. Provider spikes remain explicit targets because the GitButler spike requires a local GitButler installation and registry access.
 
 ## Rust workspace
 
-Phase 1 uses the pinned toolchain in `rust-toolchain.toml`. The
-`weft-domain` crate contains provider-neutral domain types plus the local
-SQLite/CAS repository that enforces durable Change/Revision creation. Provider
-subprocesses and provider JSON remain outside this crate's public domain types.
+Phase 1 uses the pinned toolchain in `rust-toolchain.toml`. Keep domain invariants in `crates/weft-domain` independent of SQLite, subprocesses, and provider JSON. Storage and provider crates depend inward on domain types, never the reverse.
 
-The stable `make check` gate explicitly tests the active Rust host target so a developer's global cross-compilation default cannot silently change local verification. Cross-target builds will become separate release-matrix gates after packaging is decided.
+`crates/weft-storage-sqlite` owns metadata migrations and transactional repositories. It enables foreign keys, WAL mode, a bounded busy timeout, short immediate write transactions, globally unique exact operation replay, append-only histories, versioned Assignment/Lease projections, exact-revision Materializations reconstructed from provider-evidenced events, and acyclic exact-pin Dependency graphs. Tests use disposable file-backed databases; in-memory SQLite is not evidence for WAL or multi-process behavior.
 
-The current local CLI contract is documented in [CLI v1](CLI.md).
-The provider-neutral runtime contract is documented in the [Agent Protocol v1](AGENT_PROTOCOL.md);
-run `make phase5-resume` to reproduce its separate-session resume proof.
-The orchestrator-facing ordering and blocking contract is documented in
-[Multi-Agent Workflows v1](MULTI_AGENT_WORKFLOWS.md).
+`crates/weft-artifact` owns the canonical `tree-delta-v1` codec, filesystem CAS, and reconstruction boundary. Manifest bytes and object layout are compatibility contracts defined by ADR-0003. Provider adapters may create inputs and verify base materializations, but provider objects never replace these durable bytes.
+
+`crates/weft-provider-git` owns the version-gated local Native Git adapter. It binds exact commits and trees to provider-neutral artifacts, uses raw filter-independent index plumbing, composes exact captured revisions, guards local target refs with compare-and-swap, and returns normalized evidence for integration/reconciliation. Run its focused fixture proof with `cargo test -p weft-provider-git`; the full `make check` gate includes it.
+
+`crates/weft-provider-gitbutler` owns the exact `but 0.22.0` adapter. It rejects unknown status shapes, normalizes `changeId` values only as provider references, maps exact base-to-tip stacks, exports canonical content through verified Git objects, reports conflicts and external rewrites/removals, and supports only exact repository-local fast-forward landing. The full gate runs hermetic declared-version fixtures. Run `make phase3-gitbutler-live` for the explicit live workflow; it uses disposable repositories and isolated XDG registry/config/cache directories and requires `but 0.22.0`.
+
+The repository-local Cargo configuration pins direct development commands to the
+supported Linux GNU target, so a developer-wide Cargo configuration cannot silently
+change local verification. `make check` also passes the active Rust host target
+explicitly. An exported `CARGO_BUILD_TARGET` takes precedence over this repository
+configuration; unset it for direct local commands, for example:
+
+```bash
+env -u CARGO_BUILD_TARGET cargo run -p weft-cli -- --help
+```
+
+Cross-target builds are separate release-matrix gates.
+
+## Local CLI
+
+`crates/weft-cli` provides the noninteractive `weft` process boundary. Initialize an explicit state directory, then choose human output (the default) or the stable one-object JSON envelope:
+
+```bash
+cargo run -p weft-cli -- --state-dir /tmp/weft-state init
+cargo run -p weft-cli -- --format json --state-dir /tmp/weft-state change create \
+  --change-id change-1 --operation-id op-create-1 --actor operator-1 --at 1000
+```
+
+Mutations require caller-owned operation IDs, actors, timestamps, and relevant expected heads or versions. Terminal transitions require `--yes`; commands never prompt. Run `cargo run -p weft-cli -- --help` for lifecycle groups. Native Git commands reverify exact provider commits against durable canonical revisions before materialization or integration. Provider execution enters durable `reconciling` state on uncertain outcomes; use `native-git reconcile-integration`, never blind re-execution.
+
+## Runtime archive
+
+The initial deployable boundary is the Ubuntu 24.04 x86_64 local CLI archive:
+
+```bash
+make package-release VERSION=v0.1.0
+make test-release ARCHIVE=dist/weft-0.1.0-x86_64-unknown-linux-gnu.tar.gz
+```
+
+The smoke test verifies the checksum, installs into a disposable prefix, checks
+version/help, initializes state, creates and reads a Change across processes,
+uninstalls the binary, and proves state retention. It does not publish anything.
 
 ## Work lifecycle
 
 1. Define a measurable outcome and acceptance criteria.
 2. Classify the affected domain/provider/release boundary.
-3. Create a task record for material work.
+3. Record the scope, risks, and acceptance criteria.
 4. Inspect existing decisions and evidence.
 5. Implement one coherent behavior.
 6. Run focused proof, then the verification-matrix gates.
 7. Record decisions, results, residual risks, and unavailable environments.
-
-Use `.agents/PROGRESS.md` for current project checkpoints and `.agents/DECISIONS.md` as a concise index into durable ADRs. Put large temporary evidence under `.agents/references/`; archive completed working plans under `.agents/archive/`. Durable architecture decisions live under `.agents/decisions/`, phase evidence under `.agents/phase0/`, and task records under `.agents/tasks/`.
 
 ## Source-of-truth order
 

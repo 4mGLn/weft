@@ -6,16 +6,34 @@ It treats a Change—not a branch, worktree, commit, or agent session—as the d
 
 ## Project status
 
-Weft has completed the Phase 0–7 roadmap: the durable Rust domain kernel,
-Native Git and GitButler provider adapters, JSON CLI, agent protocol, Paseo
-bridge, and multi-agent workflow contracts are implemented and acceptance-tested.
-Remaining scope boundaries are recorded in `.agents/PROGRESS.md`.
+Weft has completed the provider feasibility spike, provider-neutral domain and persistence kernel, Native Git adapter, GitButler adapter, stable local CLI, and provider-neutral agent protocol. The first deployable artifact is a local CLI archive. Hosted deployment remains out of scope.
+
+## Install
+
+Linux x86_64 (portable musl build), macOS Intel, and macOS Apple Silicon:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/4mGLn/weft/main/install.sh | sh
+```
+
+Windows x86_64:
+
+```powershell
+irm https://raw.githubusercontent.com/4mGLn/weft/main/install.ps1 | iex
+```
+
+The installers download the latest matching GitHub Release asset and verify its
+published SHA-256 digest before installing. Set `WEFT_VERSION=vMAJOR.MINOR.PATCH`
+to select an exact release. Unix installations default to `$HOME/.local`; set
+`PREFIX` to override it. Windows installations default to `%LOCALAPPDATA%\\Weft`;
+set `WEFT_PREFIX` to override it. A platform is installable once its matching
+release asset is published.
 
 ## Start here
 
-- [Product goal](GOAL.md)
-- [Normative domain model](DOMAIN.md)
-- [Implementation roadmap](ROADMAP.md)
+- [Product goal](docs/GOAL.md)
+- [Normative domain model](docs/DOMAIN.md)
+- [Implementation roadmap](docs/ROADMAP.md)
 - [Development guide](docs/DEVELOPMENT.md)
 - [Deployment and release policy](docs/DEPLOYMENT.md)
 - [Agent instructions](AGENTS.md)
@@ -26,16 +44,17 @@ Remaining scope boundaries are recorded in `.agents/PROGRESS.md`.
 make check
 ```
 
-The current executable provider evidence can be run with:
+Provider evidence and the local CLI can be run with:
 
 ```bash
 make phase0-native-git-spike
 make phase0-gitbutler-spike
+cargo run -p weft-cli -- --help
 ```
 
-The Phase 1 domain kernel is verified by `make check` and lives under `crates/weft-domain`.
+The domain kernel, canonical artifact store, SQLite store, provider adapters, and CLI are verified by `make check` and live under `crates/`.
 
-Material changes should start from the [task record template](docs/agent-harness/task-template.md), use the [verification matrix](docs/agent-harness/verification-matrix.md), and record durable design decisions under `.agents/decisions/`.
+For contributor workflow and verification requirements, follow [AGENTS.md](AGENTS.md).
 
 ## Architecture at a glance
 

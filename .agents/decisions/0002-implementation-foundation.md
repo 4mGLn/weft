@@ -16,11 +16,6 @@ Use:
 3. A filesystem content-addressed store next to the database for potentially large canonical blobs; SQLite stores manifests, digests, references, and operation metadata.
 4. A versioned `tree-delta-v1` canonical artifact containing exact base identity, sorted canonical repository-relative path operations, file modes, lowercase `sha256:<64-hex>` blob digests, and artifact version.
 5. Capability-based provider ports. Native Git uses version-gated Git plumbing; GitButler uses validated version-gated CLI JSON. Raw commands and JSON never become public domain types.
-6. Canonical bytes are a versioned binary contract: UTF-8 strings are length-prefixed
-   with unsigned 64-bit big-endian lengths; the tree manifest starts with
-   `weft/tree-delta-v1\0`, and the base-bound artifact wrapper starts with
-   `weft/canonical-artifact-v1\0`. The SHA-256 digest names the complete wrapper,
-   not a provider object or an unbound manifest.
 
 The first implementation is a single local process/CLI with safe multi-process database access. A hosted service, network database, and distributed lease authority remain out of scope.
 
@@ -37,9 +32,6 @@ The first implementation is a single local process/CLI with safe multi-process d
 - Phase 1 can enforce revision-head CAS, acyclic dependencies, candidate immutability, idempotent operations, and audit events transactionally.
 - Deployment is a local binary plus state directory initially; packaging details still require a release ADR.
 - WAL requires local filesystem semantics and one writer at a time. Weft must surface contention and unsupported storage locations.
-- Filesystem CAS writes are published only after the complete object is synced and
-  atomically linked into its digest address. A crash may leave an unreferenced
-  temporary file, but never a partial object at a canonical address.
 - Provider subprocesses require deadlines, cancellation, bounded output, redaction, and reconciliation after uncertain termination.
 
 ## Required proof
