@@ -50,6 +50,13 @@ pub enum NativeGitExecutionError {
     Uncertain,
 }
 
+/// Result of comparing a recorded integration result with a current target.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum NativeGitReconciliation {
+    Confirmed { result_commit: String },
+    Diverged { observed_target: String },
+}
+
 impl Display for NativeGitExecutionError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -672,6 +679,67 @@ impl NativeGitRepository {
             .record_integration_conflict(&conflict, audit)
             .map_err(NativeGitExecutionError::Storage)
     }
+
+    /// Reconciles a persisted running attempt against its current target ref.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage/provider error without reporting an outcome when the
+    /// target cannot be observed or durable reconciliation evidence cannot be
+    /// written.
+    pub fn reconcile_integration(
+        &self,
+        domain: &mut SqliteRepository,
+        attempt: &IntegrationAttempt,
+        expected_result: &str,
+        receipt_id: IntegrationReceiptId,
+        reconciliation_id: ReconciliationId,
+        audit: &AuditContext,
+    ) -> Result<NativeGitReconciliation, NativeGitExecutionError> {
+        let observed = self
+            .resolve_commit(attempt.target_ref())
+            .map_err(NativeGitExecutionError::Provider)?;
+        let confirmed = observed == expected_result;
+        let record = ReconciliationRecord::new(
+            reconciliation_id,
+            attempt.id().clone(),
+            if confirmed {
+                "target-confirmed"
+            } else {
+                "target-diverged"
+            },
+            format!("expected:{expected_result};observed:{observed}"),
+            confirmed,
+        )
+        .map_err(NativeGitExecutionError::Storage)?;
+        domain
+            .record_reconciliation(&record, audit)
+            .map_err(NativeGitExecutionError::Storage)?;
+        if !confirmed {
+            return Ok(NativeGitReconciliation::Diverged {
+                observed_target: observed,
+            });
+        }
+        let receipt = IntegrationReceipt::new(
+            receipt_id,
+            attempt.id().clone(),
+            attempt.expected_target_revision(),
+            expected_result,
+            format!("native-git;reconciled-target:{}", attempt.target_ref()),
+        )
+        .map_err(NativeGitExecutionError::Storage)?;
+        domain
+            .finish_integration(
+                attempt.id(),
+                IntegrationState::Succeeded,
+                Some(&receipt),
+                audit,
+            )
+            .map_err(NativeGitExecutionError::Storage)?;
+        Ok(NativeGitReconciliation::Confirmed {
+            result_commit: observed,
+        })
+    }
 }
 
 fn apply_artifact_operations(
@@ -1017,6 +1085,50 @@ mod tests {
         assert!(status.success());
     }
 
+    fn reconcile_running_attempt(
+        provider: &NativeGitRepository,
+        domain: &mut SqliteRepository,
+        prior: &IntegrationAttempt,
+        expected_result: &str,
+        audit: &AuditContext,
+    ) {
+        let resumed = IntegrationAttempt::new(
+            IntegrationId::new("integration-2").unwrap(),
+            prior.repository_id().clone(),
+            prior.candidate_id().clone(),
+            prior.target_ref(),
+            expected_result,
+            "native-git",
+            "reconcile candidate",
+            OperationId::new("operation-2").unwrap(),
+            "agent",
+        )
+        .unwrap();
+        domain.plan_integration(&resumed, audit).unwrap();
+        domain
+            .start_integration(resumed.id(), expected_result, 30)
+            .unwrap();
+        assert_eq!(
+            provider
+                .reconcile_integration(
+                    domain,
+                    &resumed,
+                    expected_result,
+                    weft_domain::IntegrationReceiptId::new("receipt-2").unwrap(),
+                    ReconciliationId::new("reconciliation-2").unwrap(),
+                    audit,
+                )
+                .unwrap(),
+            NativeGitReconciliation::Confirmed {
+                result_commit: expected_result.to_owned(),
+            }
+        );
+        assert_eq!(
+            domain.integration_state(resumed.id()).unwrap(),
+            IntegrationState::Succeeded
+        );
+    }
+
     #[test]
     fn discovers_and_resolves_exact_head() {
         let path = temporary_repository();
@@ -1322,6 +1434,13 @@ mod tests {
                 .integration_state(&IntegrationId::new("integration-1").unwrap())
                 .unwrap(),
             IntegrationState::Succeeded
+        );
+        reconcile_running_attempt(
+            &provider,
+            &mut domain,
+            &attempt,
+            receipt.result_commit(),
+            &audit,
         );
         remove_worktree(&path, &destination);
         fs::remove_dir_all(path).unwrap();

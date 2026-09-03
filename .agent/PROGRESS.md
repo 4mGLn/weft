@@ -52,12 +52,12 @@ Phase 2 — Native Git provider.
 
 ## Next checkpoint
 
-Connect guarded Native Git integration to durable attempts and receipts, then
-implement durable conflict evidence and external-state reconciliation through
-the reusable API. Discovery, exact commit inspection, durable canonical capture,
-detached-worktree materialization, path overlap inspection, conservative ordered
-artifact composition, and provider target CAS with verified receipt are complete
-and recorded in
+Add Native Git crash-injection and divergent-resolution evidence, then complete
+the Phase 2 acceptance audit. Discovery, exact commit inspection, durable
+canonical capture, detached-worktree materialization, path overlap inspection,
+conservative ordered artifact composition, guarded target CAS, durable attempts,
+receipts, conflicts, and running-attempt reconciliation are complete and recorded
+in
 `docs/tasks/phase-2-native-git-canonical-artifacts.md`.
 
 ## Known gaps
