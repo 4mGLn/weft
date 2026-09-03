@@ -64,6 +64,13 @@ impl NativeGitRepository {
             ],
         )
     }
+
+    /// Compares an observed provider ref with one exact recorded commit.
+    /// # Errors
+    /// Returns an error if the observed ref cannot resolve to a commit.
+    pub fn target_matches(&self, reference: &str, expected: &str) -> Result<bool, NativeGitError> {
+        Ok(self.resolve_commit(reference)? == expected)
+    }
 }
 
 fn run_git<const N: usize>(cwd: &Path, args: [&str; N]) -> Result<String, NativeGitError> {
@@ -163,6 +170,21 @@ mod tests {
                 .as_str()
                 .starts_with("native-git:")
         );
+        assert!(repository.target_matches("HEAD", &expected).unwrap());
+        fs::write(path.join("external"), "advance\n").unwrap();
+        let status = Command::new("git")
+            .args(["add", "external"])
+            .current_dir(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let status = Command::new("git")
+            .args(["commit", "--quiet", "-m", "external"])
+            .current_dir(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(!repository.target_matches("HEAD", &expected).unwrap());
         fs::remove_dir_all(path).unwrap();
     }
 }
