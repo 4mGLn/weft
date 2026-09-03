@@ -34,11 +34,13 @@ Phase 1 — Persistence and domain kernel.
 - Added durable integration attempts with operation-ID idempotency, fresh-candidate
   planning, expected-target guarding, required operation leases, terminal state
   validation, and receipts required for success.
+- Added durable, ordered, duplicate-free Stack versions with optimistic updates
+  and immutable historical reads.
 
 ## Next checkpoint
 
-Extend the transactional repository to durable Stack versions, then close
-remaining Phase 1 query/audit and recovery gaps.
+Audit and close the remaining Phase 1 query, audit, recovery, and relationship
+semantics gaps before the Phase 1 acceptance review.
 
 ## Known gaps
 

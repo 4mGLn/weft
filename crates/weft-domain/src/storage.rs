@@ -13,10 +13,10 @@ use crate::artifact::{PathOperation, is_sha256_digest, sha256_digest};
 use crate::{
     AssignmentId, BaseState, CandidateId, CanonicalArtifact, ChangeError, ChangeId, IntegrationId,
     IntegrationReceiptId, MaterializationId, OperationId, RepositoryId, ReviewRequestId,
-    ReviewSubmissionId, RevisionId, ValidationResultId, WorkspaceId,
+    ReviewSubmissionId, RevisionId, StackId, ValidationResultId, WorkspaceId,
 };
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 static NEXT_TEMPORARY_OBJECT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
@@ -572,6 +572,28 @@ pub struct IntegrationReceipt {
     result_revision: String,
     provider_evidence: String,
 }
+
+/// An immutable ordered, duplicate-free Stack snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StackVersion {
+    stack_id: StackId,
+    version: i64,
+    changes: Vec<ChangeId>,
+}
+impl StackVersion {
+    #[must_use]
+    pub fn stack_id(&self) -> &StackId {
+        &self.stack_id
+    }
+    #[must_use]
+    pub const fn version(&self) -> i64 {
+        self.version
+    }
+    #[must_use]
+    pub fn changes(&self) -> &[ChangeId] {
+        &self.changes
+    }
+}
 impl IntegrationReceipt {
     /// # Errors
     /// Returns an error for invalid receipt metadata.
@@ -922,6 +944,18 @@ impl SqliteRepository {
                  prior_target_revision TEXT NOT NULL,
                  result_revision TEXT NOT NULL,
                  provider_evidence TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS stacks (
+                 stack_id TEXT PRIMARY KEY NOT NULL,
+                 current_version INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS stack_entries (
+                 stack_id TEXT NOT NULL REFERENCES stacks(stack_id) ON DELETE RESTRICT,
+                 version INTEGER NOT NULL,
+                 position INTEGER NOT NULL CHECK(position >= 0),
+                 change_id TEXT NOT NULL REFERENCES changes(change_id) ON DELETE RESTRICT,
+                 PRIMARY KEY(stack_id, version, position),
+                 UNIQUE(stack_id, version, change_id)
              );",
         )?;
         let stored_version: Option<i64> =
@@ -1765,6 +1799,116 @@ impl SqliteRepository {
         )?;
         Ok(())
     }
+
+    /// Creates the first immutable stack version from an ordered, duplicate-free Change list.
+    /// # Errors
+    /// Returns an error for missing Changes, empty/duplicate entries, or duplicate Stack ID.
+    pub fn create_stack(
+        &mut self,
+        stack_id: StackId,
+        changes: Vec<ChangeId>,
+    ) -> Result<StackVersion, StorageError> {
+        self.write_stack_version(stack_id, None, changes)
+    }
+
+    /// Appends a new immutable stack version only if the expected version is current.
+    /// # Errors
+    /// Returns an error for a stale/missing Stack or invalid entries.
+    pub fn revise_stack(
+        &mut self,
+        stack_id: StackId,
+        expected_version: i64,
+        changes: Vec<ChangeId>,
+    ) -> Result<StackVersion, StorageError> {
+        self.write_stack_version(stack_id, Some(expected_version), changes)
+    }
+
+    fn write_stack_version(
+        &mut self,
+        stack_id: StackId,
+        expected_version: Option<i64>,
+        changes: Vec<ChangeId>,
+    ) -> Result<StackVersion, StorageError> {
+        if changes.is_empty() {
+            return Err(StorageError::EmptyStack);
+        }
+        let mut seen = HashSet::new();
+        if changes.iter().any(|change| !seen.insert(change.as_str())) {
+            return Err(StorageError::DuplicateStackEntry);
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let version = match expected_version {
+            None => {
+                let inserted = transaction.execute(
+                    "INSERT OR IGNORE INTO stacks(stack_id, current_version) VALUES (?1, 1)",
+                    [stack_id.as_str()],
+                )?;
+                if inserted == 0 {
+                    return Err(StorageError::DuplicateStack(stack_id));
+                }
+                1
+            }
+            Some(expected) => {
+                let current: Option<i64> = transaction
+                    .query_row(
+                        "SELECT current_version FROM stacks WHERE stack_id = ?1",
+                        [stack_id.as_str()],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                let current =
+                    current.ok_or_else(|| StorageError::MissingStack(stack_id.clone()))?;
+                if current != expected {
+                    return Err(StorageError::StaleStackVersion {
+                        expected,
+                        actual: current,
+                    });
+                }
+                transaction.execute("UPDATE stacks SET current_version = ?1 WHERE stack_id = ?2 AND current_version = ?3", params![current + 1, stack_id.as_str(), expected])?;
+                current + 1
+            }
+        };
+        for (position, change) in changes.iter().enumerate() {
+            ensure_change_exists(&transaction, change)?;
+            transaction.execute("INSERT INTO stack_entries(stack_id, version, position, change_id) VALUES (?1, ?2, ?3, ?4)", params![stack_id.as_str(), version, position, change.as_str()])?;
+        }
+        transaction.commit()?;
+        Ok(StackVersion {
+            stack_id,
+            version,
+            changes,
+        })
+    }
+
+    /// Loads one immutable stack version; no current ordering is inferred.
+    /// # Errors
+    /// Returns an error for a missing Stack/version or invalid persisted IDs.
+    pub fn load_stack(
+        &self,
+        stack_id: &StackId,
+        version: i64,
+    ) -> Result<StackVersion, StorageError> {
+        let mut statement = self.connection.prepare("SELECT change_id FROM stack_entries WHERE stack_id = ?1 AND version = ?2 ORDER BY position")?;
+        let rows = statement.query_map(params![stack_id.as_str(), version], |row| {
+            row.get::<_, String>(0)
+        })?;
+        let changes: Vec<ChangeId> = rows
+            .map(|row| ChangeId::new(row?).map_err(StorageError::Domain))
+            .collect::<Result<_, _>>()?;
+        if changes.is_empty() {
+            return Err(StorageError::MissingStackVersion {
+                stack_id: stack_id.clone(),
+                version,
+            });
+        }
+        Ok(StackVersion {
+            stack_id: stack_id.clone(),
+            version,
+            changes,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -1801,6 +1945,18 @@ pub enum StorageError {
     ReceiptRequiresSuccess,
     ReceiptIntegrationMismatch,
     IntegrationLeaseRequired(ChangeId),
+    DuplicateStack(StackId),
+    MissingStack(StackId),
+    MissingStackVersion {
+        stack_id: StackId,
+        version: i64,
+    },
+    EmptyStack,
+    DuplicateStackEntry,
+    StaleStackVersion {
+        expected: i64,
+        actual: i64,
+    },
     EmptyCandidate,
     RevisionDoesNotBelongToChange {
         revision_id: RevisionId,
@@ -1907,6 +2063,19 @@ impl Display for StorageError {
                 formatter,
                 "integration lease required for change: {}",
                 id.as_str()
+            ),
+            Self::DuplicateStack(id) => write!(formatter, "duplicate stack: {}", id.as_str()),
+            Self::MissingStack(id) => write!(formatter, "missing stack: {}", id.as_str()),
+            Self::MissingStackVersion { stack_id, version } => write!(
+                formatter,
+                "missing stack version: {}@{version}",
+                stack_id.as_str()
+            ),
+            Self::EmptyStack => formatter.write_str("stack requires at least one change"),
+            Self::DuplicateStackEntry => formatter.write_str("stack contains a duplicate change"),
+            Self::StaleStackVersion { expected, actual } => write!(
+                formatter,
+                "stale stack version: expected {expected}, actual {actual}"
             ),
             Self::EmptyCandidate => formatter.write_str("candidate requires at least one input"),
             Self::RevisionDoesNotBelongToChange {
@@ -2917,6 +3086,43 @@ mod tests {
                 .unwrap(),
             1
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn versions_ordered_stacks_without_mutating_history() {
+        let root = temporary_directory();
+        let database = root.join("weft.sqlite");
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let mut repository = SqliteRepository::open(&database, store.clone()).unwrap();
+        let first = ChangeId::new("first").unwrap();
+        let second = ChangeId::new("second").unwrap();
+        repository.create_change(first.clone()).unwrap();
+        repository.create_change(second.clone()).unwrap();
+        let stack = StackId::new("stack-1").unwrap();
+        let original = repository
+            .create_stack(stack.clone(), vec![first.clone(), second.clone()])
+            .unwrap();
+        let revised = repository
+            .revise_stack(stack.clone(), 1, vec![second.clone(), first.clone()])
+            .unwrap();
+        assert_eq!(original.version(), 1);
+        assert_eq!(revised.version(), 2);
+        assert_eq!(repository.load_stack(&stack, 1).unwrap(), original);
+        assert!(matches!(
+            repository.revise_stack(stack.clone(), 1, vec![first.clone()]),
+            Err(StorageError::StaleStackVersion { .. })
+        ));
+        drop(repository);
+        let mut repository = SqliteRepository::open(&database, store).unwrap();
+        assert_eq!(repository.load_stack(&stack, 2).unwrap(), revised);
+        assert!(matches!(
+            repository.create_stack(
+                StackId::new("stack-duplicate").unwrap(),
+                vec![first.clone(), first]
+            ),
+            Err(StorageError::DuplicateStackEntry)
+        ));
         fs::remove_dir_all(root).unwrap();
     }
 }

@@ -51,6 +51,7 @@ domain_id!(ValidationResultId);
 domain_id!(IntegrationId);
 domain_id!(OperationId);
 domain_id!(IntegrationReceiptId);
+domain_id!(StackId);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BaseState {
