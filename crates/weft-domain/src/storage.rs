@@ -2896,6 +2896,7 @@ impl SqliteRepository {
         source: &ChangeId,
         target: &ChangeId,
         kind: ChangeRelationKind,
+        audit: &AuditContext,
     ) -> Result<(), StorageError> {
         if source == target {
             return Err(StorageError::Invariant(
@@ -2911,6 +2912,15 @@ impl SqliteRepository {
         if inserted == 0 {
             return Err(StorageError::DuplicateChangeRelation);
         }
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('change-related', ?1, ?2, 'unrelated', ?3, ?4, NULL, NULL)",
+            params![
+                audit.actor,
+                audit.occurred_at_unix_ms,
+                kind.as_str(),
+                format!("{},{}", source.as_str(), target.as_str()),
+            ],
+        )?;
         transaction.commit()?;
         Ok(())
     }
@@ -2918,14 +2928,31 @@ impl SqliteRepository {
     /// Persists a non-conclusive overlap signal for two exact existing revisions.
     /// # Errors
     /// Returns an error for missing revisions or duplicate overlap identity.
-    pub fn record_overlap(&mut self, overlap: &Overlap) -> Result<(), StorageError> {
-        let inserted = self.connection.execute(
+    pub fn record_overlap(
+        &mut self,
+        overlap: &Overlap,
+        audit: &AuditContext,
+    ) -> Result<(), StorageError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let inserted = transaction.execute(
             "INSERT OR IGNORE INTO overlaps(overlap_id, left_revision_id, right_revision_id, detail) VALUES (?1, ?2, ?3, ?4)",
             params![overlap.id.as_str(), overlap.left_revision.as_str(), overlap.right_revision.as_str(), overlap.detail],
         )?;
         if inserted == 0 {
             return Err(StorageError::DuplicateOverlap(overlap.id.clone()));
         }
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('overlap-recorded', ?1, ?2, 'not-recorded', 'recorded', ?3, NULL, ?4)",
+            params![
+                audit.actor,
+                audit.occurred_at_unix_ms,
+                format!("{},{},{}", overlap.id.as_str(), overlap.left_revision.as_str(), overlap.right_revision.as_str()),
+                overlap.detail,
+            ],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 }
@@ -4914,17 +4941,37 @@ mod tests {
             repository.create_change(first.clone()).unwrap();
             repository.create_change(second.clone()).unwrap();
             repository
-                .add_change_relation(&first, &second, ChangeRelationKind::TaskDecomposition)
+                .add_change_relation(
+                    &first,
+                    &second,
+                    ChangeRelationKind::TaskDecomposition,
+                    &AuditContext::new("agent-1", 100).unwrap(),
+                )
                 .unwrap();
             repository
-                .add_change_relation(&first, &second, ChangeRelationKind::RelatedTo)
+                .add_change_relation(
+                    &first,
+                    &second,
+                    ChangeRelationKind::RelatedTo,
+                    &AuditContext::new("agent-1", 101).unwrap(),
+                )
                 .unwrap();
             assert!(matches!(
-                repository.add_change_relation(&first, &second, ChangeRelationKind::RelatedTo),
+                repository.add_change_relation(
+                    &first,
+                    &second,
+                    ChangeRelationKind::RelatedTo,
+                    &AuditContext::new("agent-1", 102).unwrap()
+                ),
                 Err(StorageError::DuplicateChangeRelation)
             ));
             assert!(matches!(
-                repository.add_change_relation(&first, &first, ChangeRelationKind::RelatedTo),
+                repository.add_change_relation(
+                    &first,
+                    &first,
+                    ChangeRelationKind::RelatedTo,
+                    &AuditContext::new("agent-1", 103).unwrap()
+                ),
                 Err(StorageError::Invariant(_))
             ));
         }
@@ -4965,9 +5012,11 @@ mod tests {
             "src/lib.rs",
         )
         .unwrap();
-        repository.record_overlap(&overlap).unwrap();
+        repository
+            .record_overlap(&overlap, &AuditContext::new("agent-1", 100).unwrap())
+            .unwrap();
         assert!(matches!(
-            repository.record_overlap(&overlap),
+            repository.record_overlap(&overlap, &AuditContext::new("agent-1", 101).unwrap()),
             Err(StorageError::DuplicateOverlap(_))
         ));
         assert_eq!(
