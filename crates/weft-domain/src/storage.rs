@@ -1620,6 +1620,28 @@ impl SqliteRepository {
         })
     }
 
+    /// Loads the currently held exclusive lease for one Change operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the Change or lease is absent, or persisted values
+    /// violate the lease metadata contract.
+    pub fn load_lease(&self, change_id: &ChangeId, operation: &str) -> Result<Lease, StorageError> {
+        self.load_change(change_id)?;
+        let row: Option<(String, i64)> = self.connection.query_row(
+            "SELECT holder, expires_at_unix_ms FROM leases WHERE change_id = ?1 AND operation = ?2",
+            params![change_id.as_str(), operation],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?;
+        let (holder, expires_at_unix_ms) = row.ok_or(StorageError::LeaseLost)?;
+        Ok(Lease {
+            change_id: change_id.clone(),
+            operation: valid_lease_value(operation.to_owned(), "operation")?,
+            holder: valid_lease_value(holder, "holder")?,
+            expires_at_unix_ms,
+        })
+    }
+
     /// Renews an active lease only for its current holder.
     /// # Errors
     /// Returns an error for an expired/missing lease, mismatched holder, or invalid expiry.

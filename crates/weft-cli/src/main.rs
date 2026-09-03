@@ -91,6 +91,16 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
         arguments.drain(0..2);
         return acquire(&mut repository, &change, &mut arguments);
     }
+    if arguments.len() >= 3 && arguments[0] == "change" && arguments[1] == "renew" {
+        let change = arguments.remove(2);
+        arguments.drain(0..2);
+        return renew_lease(&mut repository, &change, &mut arguments);
+    }
+    if arguments.len() >= 3 && arguments[0] == "change" && arguments[1] == "release" {
+        let change = arguments.remove(2);
+        arguments.drain(0..2);
+        return release_lease(&mut repository, &change, &mut arguments);
+    }
     if arguments.len() == 4 && arguments[0] == "dependency" && arguments[1] == "add" {
         return add_dependency(&mut repository, &arguments[2], &arguments[3]);
     }
@@ -191,6 +201,59 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
             "expected `status`, `change create <id>`, or `change show <id>`",
         )),
     }
+}
+
+fn renew_lease(
+    repository: &mut SqliteRepository,
+    change: &str,
+    arguments: &mut Vec<String>,
+) -> Result<String, CliError> {
+    let operation = required_option(arguments, "--operation")?;
+    let now = required_i64(arguments, "--now")?;
+    let expires = required_i64(arguments, "--expires")?;
+    if !arguments.is_empty() {
+        return Err(CliError::usage("unexpected change renew arguments"));
+    }
+    let change = ChangeId::new(change).map_err(|error| CliError::usage(error.to_string()))?;
+    let lease = repository
+        .load_lease(&change, &operation)
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    let lease = repository
+        .renew_lease(&lease, now, expires)
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    Ok(lease_json(&lease))
+}
+fn release_lease(
+    repository: &mut SqliteRepository,
+    change: &str,
+    arguments: &mut Vec<String>,
+) -> Result<String, CliError> {
+    let operation = required_option(arguments, "--operation")?;
+    let now = required_i64(arguments, "--now")?;
+    if !arguments.is_empty() {
+        return Err(CliError::usage("unexpected change release arguments"));
+    }
+    let change = ChangeId::new(change).map_err(|error| CliError::usage(error.to_string()))?;
+    let lease = repository
+        .load_lease(&change, &operation)
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    repository
+        .release_lease(&lease, now)
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    Ok(format!(
+        "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"lease\",\"changeId\":\"{}\",\"operation\":\"{}\",\"released\":true}}",
+        escape(change.as_str()),
+        escape(&operation)
+    ))
+}
+fn lease_json(lease: &weft_domain::Lease) -> String {
+    format!(
+        "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"lease\",\"changeId\":\"{}\",\"operation\":\"{}\",\"holder\":\"{}\",\"expiresAtUnixMs\":{}}}",
+        escape(lease.change_id().as_str()),
+        escape(lease.operation()),
+        escape(lease.holder()),
+        lease.expires_at_unix_ms()
+    )
 }
 
 fn add_relation(
