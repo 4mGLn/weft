@@ -10,7 +10,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use weft_domain::{
-    BaseState, CanonicalArtifact, ContentStore, FileMode, PathOperation, RepositoryId, TreeDelta,
+    AuditContext, BaseState, CanonicalArtifact, ConflictId, ContentStore, FileMode,
+    IntegrationAttempt, IntegrationConflict, IntegrationReceipt, IntegrationReceiptId,
+    IntegrationState, PathOperation, ReconciliationId, ReconciliationRecord, RepositoryId,
+    SqliteRepository, StorageError, TreeDelta,
 };
 
 /// A discovered local Git repository and its stable provider identity inputs.
@@ -37,6 +40,33 @@ pub struct NativeGitIntegrationReceipt {
     result_commit: String,
     result_tree: String,
 }
+
+/// Result classification for a durable Native Git integration execution.
+#[derive(Debug)]
+pub enum NativeGitExecutionError {
+    Storage(StorageError),
+    Provider(NativeGitError),
+    Conflict(Vec<String>),
+    Uncertain,
+}
+
+impl Display for NativeGitExecutionError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Storage(error) => write!(f, "durable integration state failed: {error}"),
+            Self::Provider(error) => write!(f, "Native Git integration failed: {error}"),
+            Self::Conflict(paths) => write!(
+                f,
+                "Native Git integration conflicted at: {}",
+                paths.join(", ")
+            ),
+            Self::Uncertain => {
+                f.write_str("Native Git target outcome is uncertain and requires reconciliation")
+            }
+        }
+    }
+}
+impl std::error::Error for NativeGitExecutionError {}
 
 impl NativeGitIntegrationReceipt {
     #[must_use]
@@ -497,6 +527,151 @@ impl NativeGitRepository {
             result_tree: tree_id.to_owned(),
         })
     }
+
+    /// Executes one persisted integration attempt against its exact candidate.
+    ///
+    /// The provider operation occurs only after durable transition to running.
+    /// Verified success persists the receipt; conflicts are durable; uncertain
+    /// target observation remains running with an unresolved reconciliation
+    /// record rather than being reported as success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an explicit conflict after recording it, an uncertain result
+    /// after storing reconciliation evidence, or a blocking storage/provider
+    /// error that prevented verified completion.
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_integration(
+        &self,
+        domain: &mut SqliteRepository,
+        attempt: &IntegrationAttempt,
+        receipt_id: IntegrationReceiptId,
+        conflict_id: ConflictId,
+        reconciliation_id: ReconciliationId,
+        audit: &AuditContext,
+        now_unix_ms: i64,
+        destination: impl AsRef<Path>,
+    ) -> Result<NativeGitIntegrationReceipt, NativeGitExecutionError> {
+        if attempt.repository_id() != &self.repository_id || attempt.provider() != "native-git" {
+            return Err(NativeGitExecutionError::Provider(
+                NativeGitError::RepositoryMismatch,
+            ));
+        }
+        let observed = self
+            .resolve_commit(attempt.target_ref())
+            .map_err(NativeGitExecutionError::Provider)?;
+        domain
+            .start_integration(attempt.id(), &observed, now_unix_ms)
+            .map_err(NativeGitExecutionError::Storage)?;
+        let candidate = domain
+            .load_candidate(attempt.candidate_id())
+            .map_err(NativeGitExecutionError::Storage)?;
+        let artifacts = candidate
+            .inputs()
+            .iter()
+            .map(|input| domain.load_artifact_for_revision(input.revision_id()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(NativeGitExecutionError::Storage)?;
+        let materialization =
+            match self.compose_artifacts(&artifacts, domain.content_store(), destination) {
+                Ok(value) => value,
+                Err(NativeGitError::CompositionConflict(paths)) => {
+                    Self::record_conflict(
+                        domain,
+                        attempt,
+                        conflict_id,
+                        &observed,
+                        "compose",
+                        Some(format!("paths:{}", paths.join(","))),
+                        audit,
+                    )?;
+                    return Err(NativeGitExecutionError::Conflict(paths));
+                }
+                Err(error) => return Err(NativeGitExecutionError::Provider(error)),
+            };
+        match self.integrate_tree(
+            attempt.target_ref(),
+            attempt.expected_target_revision(),
+            materialization.tree_id(),
+            attempt.strategy(),
+        ) {
+            Ok(provider_receipt) => {
+                let receipt = IntegrationReceipt::new(
+                    receipt_id,
+                    attempt.id().clone(),
+                    provider_receipt.prior_target(),
+                    provider_receipt.result_commit(),
+                    format!(
+                        "native-git;target:{};tree:{}",
+                        provider_receipt.target_ref(),
+                        provider_receipt.result_tree()
+                    ),
+                )
+                .map_err(NativeGitExecutionError::Storage)?;
+                domain
+                    .finish_integration(
+                        attempt.id(),
+                        IntegrationState::Succeeded,
+                        Some(&receipt),
+                        audit,
+                    )
+                    .map_err(NativeGitExecutionError::Storage)?;
+                Ok(provider_receipt)
+            }
+            Err(NativeGitError::TargetMismatch { actual, .. }) => {
+                Self::record_conflict(
+                    domain,
+                    attempt,
+                    conflict_id,
+                    &actual,
+                    "target-cas",
+                    None,
+                    audit,
+                )?;
+                Err(NativeGitExecutionError::Conflict(Vec::new()))
+            }
+            Err(NativeGitError::UncertainTarget { actual, .. }) => {
+                let record = ReconciliationRecord::new(
+                    reconciliation_id,
+                    attempt.id().clone(),
+                    "target-uncertain",
+                    format!("observed-target:{actual}"),
+                    false,
+                )
+                .map_err(NativeGitExecutionError::Storage)?;
+                domain
+                    .record_reconciliation(&record, audit)
+                    .map_err(NativeGitExecutionError::Storage)?;
+                Err(NativeGitExecutionError::Uncertain)
+            }
+            Err(error) => Err(NativeGitExecutionError::Provider(error)),
+        }
+    }
+
+    fn record_conflict(
+        domain: &mut SqliteRepository,
+        attempt: &IntegrationAttempt,
+        conflict_id: ConflictId,
+        observed_target: &str,
+        operation: &str,
+        validation_evidence: Option<String>,
+        audit: &AuditContext,
+    ) -> Result<(), NativeGitExecutionError> {
+        let conflict = IntegrationConflict::new(
+            conflict_id,
+            attempt.id().clone(),
+            attempt.candidate_id().clone(),
+            format!("native-git-target:{observed_target}"),
+            operation,
+            None,
+            Some(observed_target.to_owned()),
+            validation_evidence,
+        )
+        .map_err(NativeGitExecutionError::Storage)?;
+        domain
+            .record_integration_conflict(&conflict, audit)
+            .map_err(NativeGitExecutionError::Storage)
+    }
 }
 
 fn apply_artifact_operations(
@@ -747,6 +922,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
+    use weft_domain::{
+        CandidateId, CandidateInput, ChangeId, IntegrationId, OperationId, RevisionId,
+    };
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -1066,6 +1244,86 @@ mod tests {
             run_git(&path, ["rev-parse", "refs/heads/target"]).unwrap(),
             external
         );
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn executes_a_persisted_attempt_and_records_a_receipt() {
+        let path = temporary_repository();
+        let base = run_git(&path, ["rev-parse", "HEAD"]).unwrap();
+        fs::write(path.join("integrated"), "durable\n").unwrap();
+        commit_files(&path, "candidate", &["integrated"]);
+        let revision_commit = run_git(&path, ["rev-parse", "HEAD"]).unwrap();
+        let status = Command::new("git")
+            .args(["branch", "target", &base])
+            .current_dir(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let provider = NativeGitRepository::discover(&path).unwrap();
+        let store = ContentStore::open(path.join("weft-content")).unwrap();
+        let artifact = provider
+            .capture_revision(&base, &revision_commit, &store)
+            .unwrap();
+        let mut domain = SqliteRepository::open(path.join("weft.sqlite"), store).unwrap();
+        let change = ChangeId::new("change-1").unwrap();
+        let revision = RevisionId::new("revision-1").unwrap();
+        domain.create_change(change.clone()).unwrap();
+        domain
+            .append_revision(&change, None, revision.clone(), &artifact)
+            .unwrap();
+        let candidate = CandidateId::new("candidate-1").unwrap();
+        domain
+            .create_candidate(
+                candidate.clone(),
+                artifact.base().clone(),
+                vec![CandidateInput::new(change.clone(), revision.clone())],
+            )
+            .unwrap();
+        let audit = AuditContext::new("agent", 10).unwrap();
+        domain
+            .acquire_lease(&change, "integrate", "agent", 10, 100)
+            .unwrap();
+        let attempt = IntegrationAttempt::new(
+            IntegrationId::new("integration-1").unwrap(),
+            provider.repository_id().clone(),
+            candidate,
+            "refs/heads/target",
+            base.clone(),
+            "native-git",
+            "integrate candidate",
+            OperationId::new("operation-1").unwrap(),
+            "agent",
+        )
+        .unwrap();
+        domain.plan_integration(&attempt, &audit).unwrap();
+        let destination = path.with_file_name(format!(
+            "weft-native-git-execute-{}",
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let receipt = provider
+            .execute_integration(
+                &mut domain,
+                &attempt,
+                weft_domain::IntegrationReceiptId::new("receipt-1").unwrap(),
+                ConflictId::new("conflict-1").unwrap(),
+                ReconciliationId::new("reconciliation-1").unwrap(),
+                &audit,
+                20,
+                &destination,
+            )
+            .unwrap();
+        assert_eq!(
+            run_git(&path, ["rev-parse", "refs/heads/target"]).unwrap(),
+            receipt.result_commit()
+        );
+        assert_eq!(
+            domain
+                .integration_state(&IntegrationId::new("integration-1").unwrap())
+                .unwrap(),
+            IntegrationState::Succeeded
+        );
+        remove_worktree(&path, &destination);
         fs::remove_dir_all(path).unwrap();
     }
 

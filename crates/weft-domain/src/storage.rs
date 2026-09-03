@@ -894,6 +894,34 @@ impl IntegrationAttempt {
         &self.id
     }
     #[must_use]
+    pub fn repository_id(&self) -> &RepositoryId {
+        &self.repository_id
+    }
+    #[must_use]
+    pub fn candidate_id(&self) -> &CandidateId {
+        &self.candidate_id
+    }
+    #[must_use]
+    pub fn target_ref(&self) -> &str {
+        &self.target_ref
+    }
+    #[must_use]
+    pub fn expected_target_revision(&self) -> &str {
+        &self.expected_target_revision
+    }
+    #[must_use]
+    pub fn provider(&self) -> &str {
+        &self.provider
+    }
+    #[must_use]
+    pub fn strategy(&self) -> &str {
+        &self.strategy
+    }
+    #[must_use]
+    pub fn actor(&self) -> &str {
+        &self.actor
+    }
+    #[must_use]
     pub fn state(&self) -> IntegrationState {
         self.state
     }
@@ -1153,6 +1181,12 @@ pub struct SqliteRepository {
 }
 
 impl SqliteRepository {
+    /// Returns the durable content store used to verify revision artifacts.
+    #[must_use]
+    pub fn content_store(&self) -> &ContentStore {
+        &self.content_store
+    }
+
     /// # Errors
     ///
     /// Returns an error when `SQLite` cannot open, configure, or migrate the database.
@@ -2667,6 +2701,25 @@ impl SqliteRepository {
         )?;
         transaction.commit()?;
         Ok(())
+    }
+
+    /// Loads the durable state of one integration attempt.
+    /// # Errors
+    /// Returns an error for a missing or malformed integration attempt.
+    pub fn integration_state(
+        &self,
+        integration_id: &IntegrationId,
+    ) -> Result<IntegrationState, StorageError> {
+        let state: String = self
+            .connection
+            .query_row(
+                "SELECT state FROM integration_attempts WHERE integration_id = ?1",
+                [integration_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| StorageError::MissingIntegration(integration_id.clone()))?;
+        IntegrationState::parse(&state)
     }
 
     /// Records a terminal provider outcome; only verified success can create a receipt.
