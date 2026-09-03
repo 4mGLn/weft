@@ -623,6 +623,14 @@ impl ValidationStatus {
             Self::Blocked => "blocked",
         }
     }
+    fn parse(value: &str) -> Result<Self, StorageError> {
+        match value {
+            "passed" => Ok(Self::Passed),
+            "failed" => Ok(Self::Failed),
+            "blocked" => Ok(Self::Blocked),
+            _ => Err(StorageError::Invariant("unknown validation status")),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1994,6 +2002,21 @@ impl SqliteRepository {
             return Err(StorageError::DuplicateValidationResult(result.id.clone()));
         }
         Ok(())
+    }
+
+    /// Returns validation statuses recorded against one exact immutable target.
+    /// # Errors
+    /// Returns an error for a missing target or malformed persisted status.
+    pub fn validation_statuses_for(
+        &self,
+        target: &Target,
+    ) -> Result<Vec<ValidationStatus>, StorageError> {
+        ensure_target_exists(&self.connection, target)?;
+        let mut statement = self.connection.prepare("SELECT status FROM validation_results WHERE target_kind = ?1 AND target_id = ?2 ORDER BY recorded_at_unix_ms")?;
+        let rows = statement.query_map(params![target.kind(), target.id()], |row| {
+            row.get::<_, String>(0)
+        })?;
+        rows.map(|row| ValidationStatus::parse(&row?)).collect()
     }
 
     /// Plans a provider-neutral integration from a fresh immutable candidate.
@@ -3523,6 +3546,54 @@ mod tests {
             repository
                 .target_is_stale(&Target::Revision(first))
                 .unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn returns_validation_history_for_exact_target() {
+        let root = temporary_directory();
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let artifact = artifact(&store);
+        let mut repository = SqliteRepository::open(root.join("weft.sqlite"), store).unwrap();
+        let change = ChangeId::new("change-1").unwrap();
+        let revision = RevisionId::new("revision-1").unwrap();
+        repository.create_change(change.clone()).unwrap();
+        repository
+            .append_revision(&change, None, revision.clone(), &artifact)
+            .unwrap();
+        let target = Target::Revision(revision);
+        repository
+            .record_validation(
+                &ValidationResult::new(
+                    ValidationResultId::new("v1").unwrap(),
+                    target.clone(),
+                    "test",
+                    "local",
+                    ValidationStatus::Failed,
+                    "run-1",
+                    1,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        repository
+            .record_validation(
+                &ValidationResult::new(
+                    ValidationResultId::new("v2").unwrap(),
+                    target.clone(),
+                    "test",
+                    "local",
+                    ValidationStatus::Passed,
+                    "run-2",
+                    2,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            repository.validation_statuses_for(&target).unwrap(),
+            vec![ValidationStatus::Failed, ValidationStatus::Passed]
         );
         fs::remove_dir_all(root).unwrap();
     }
