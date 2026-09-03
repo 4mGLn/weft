@@ -53,17 +53,27 @@ Phase 3 — GitButler provider.
   detached materialization, overlap detection, conservative composition, guarded
   target CAS, durable receipts/conflicts, and restart-safe reconciliation are
   proven through the reusable API.
+- Added a version-gated GitButler provider adapter for the Phase 0-supported
+  CLI/status schema: target inspection and reconciliation, virtual-branch
+  creation and rewrite observation, anchored stacks, and whole-stack landing.
+- Normalized GitButler virtual-branch provider references as logical change ID,
+  exact commit ID, and conflict state; the supported status projection is tested
+  against multiple branches and normal JSON whitespace.
+- Added canonical GitButler branch export through the established Native Git
+  artifact boundary. GitButler IDs remain supplemental provider references while
+  the artifact retains only exact base-bound canonical content.
 
 ## Next checkpoint
 
-Implement GitButler repository discovery and version-gated capability inspection,
-then map the Phase 0-supported virtual/parallel branch and stack behavior to
-the durable domain API.
+Implement durable GitButler integration execution with an exact observed target,
+verified receipt or explicit conflict/uncertain outcome, and restart-safe
+reconciliation. Add a reproducible provider fixture that proves canonical export
+and recovery against a live supported `but` CLI.
 
 ## Known gaps
 
 - No provider runtime implementation or stable CLI.
-- GitButler provider removal/reconnect and crash-uncertain landing remain unproven
-  implementation gates.
+- GitButler provider removal/reconnect, durable landing receipts, and
+  crash-uncertain landing remain unproven implementation gates.
 - No runtime packaging or deployment support.
 - No software license selected.
