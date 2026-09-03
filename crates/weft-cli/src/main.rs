@@ -143,6 +143,11 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
         arguments.drain(0..2);
         return run_integration(&mut repository, &id, &mut arguments);
     }
+    if arguments.len() >= 3 && arguments[0] == "reconcile" && arguments[1] == "integration" {
+        let id = arguments.remove(2);
+        arguments.drain(0..2);
+        return reconcile_integration(&mut repository, &id, &mut arguments);
+    }
     if arguments.len() == 2 && arguments[0] == "history" {
         return history(&repository, &arguments[1]);
     }
@@ -176,6 +181,61 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
         }
         _ => Err(CliError::usage(
             "expected `status`, `change create <id>`, or `change show <id>`",
+        )),
+    }
+}
+
+fn reconcile_integration(
+    repository: &mut SqliteRepository,
+    id: &str,
+    arguments: &mut Vec<String>,
+) -> Result<String, CliError> {
+    let path = required_option(arguments, "--repository")?;
+    let expected = required_option(arguments, "--expected-result")?;
+    let receipt = required_option(arguments, "--receipt-id")?;
+    let reconciliation = required_option(arguments, "--reconciliation-id")?;
+    let actor = required_option(arguments, "--actor")?;
+    let at = required_i64(arguments, "--at")?;
+    if !arguments.is_empty() {
+        return Err(CliError::usage(
+            "unexpected reconcile integration arguments",
+        ));
+    }
+    let attempt = repository
+        .load_integration_attempt(
+            &IntegrationId::new(id).map_err(|error| CliError::usage(error.to_string()))?,
+        )
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    if attempt.provider() != "native-git" {
+        return Err(CliError::usage(
+            "reconcile integration currently supports provider native-git only",
+        ));
+    }
+    let provider =
+        NativeGitRepository::discover(path).map_err(|error| CliError::domain(error.to_string()))?;
+    let audit = AuditContext::new(actor, at).map_err(|error| CliError::usage(error.to_string()))?;
+    let result = provider
+        .reconcile_integration(
+            repository,
+            &attempt,
+            &expected,
+            IntegrationReceiptId::new(receipt)
+                .map_err(|error| CliError::usage(error.to_string()))?,
+            ReconciliationId::new(reconciliation)
+                .map_err(|error| CliError::usage(error.to_string()))?,
+            &audit,
+        )
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    match result {
+        weft_native_git::NativeGitReconciliation::Confirmed { result_commit } => Ok(format!(
+            "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"reconciliation\",\"integrationId\":\"{}\",\"resolved\":true,\"resultCommit\":\"{}\"}}",
+            escape(id),
+            escape(&result_commit)
+        )),
+        weft_native_git::NativeGitReconciliation::Diverged { observed_target } => Ok(format!(
+            "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"reconciliation\",\"integrationId\":\"{}\",\"resolved\":false,\"observedTarget\":\"{}\"}}",
+            escape(id),
+            escape(&observed_target)
         )),
     }
 }
