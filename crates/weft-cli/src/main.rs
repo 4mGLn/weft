@@ -4,12 +4,12 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use weft_domain::{
-    Assignment, AssignmentId, AuditContext, CandidateId, CandidateInput, ChangeId, ConflictId,
-    ContentStore, Dependency, IntegrationAttempt, IntegrationId, IntegrationReceiptId,
-    MaterializationId, MaterializationState, OperationId, ReconciliationId, RepositoryId,
-    ReviewOutcome, ReviewRequest, ReviewRequestId, ReviewSubmission, ReviewSubmissionId,
-    RevisionId, SqliteRepository, StackId, Target, ValidationResult, ValidationResultId,
-    ValidationStatus, WorkspaceId,
+    Assignment, AssignmentId, AuditContext, CandidateId, CandidateInput, ChangeId,
+    ChangeRelationKind, ConflictId, ContentStore, Dependency, IntegrationAttempt, IntegrationId,
+    IntegrationReceiptId, MaterializationId, MaterializationState, OperationId, ReconciliationId,
+    RepositoryId, ReviewOutcome, ReviewRequest, ReviewRequestId, ReviewSubmission,
+    ReviewSubmissionId, RevisionId, SqliteRepository, StackId, Target, ValidationResult,
+    ValidationResultId, ValidationStatus, WorkspaceId,
 };
 use weft_native_git::NativeGitRepository;
 
@@ -151,6 +151,14 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
     if arguments.len() == 2 && arguments[0] == "history" {
         return history(&repository, &arguments[1]);
     }
+    if arguments.len() >= 4 && arguments[0] == "relation" && arguments[1] == "add" {
+        return add_relation(
+            &mut repository,
+            &arguments[2],
+            &arguments[3],
+            &arguments[4..],
+        );
+    }
     match arguments.as_slice() {
         [command] if command == "status" => Ok(format!(
             "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"status\",\"stateDirectory\":\"{}\"}}",
@@ -183,6 +191,41 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
             "expected `status`, `change create <id>`, or `change show <id>`",
         )),
     }
+}
+
+fn add_relation(
+    repository: &mut SqliteRepository,
+    source: &str,
+    target: &str,
+    arguments: &[String],
+) -> Result<String, CliError> {
+    let mut arguments = arguments.to_vec();
+    let kind = required_option(&mut arguments, "--kind")?;
+    let actor = required_option(&mut arguments, "--actor")?;
+    let at = required_i64(&mut arguments, "--at")?;
+    if !arguments.is_empty() {
+        return Err(CliError::usage("unexpected relation add arguments"));
+    }
+    let kind = match kind.as_str() {
+        "task-decomposition" => ChangeRelationKind::TaskDecomposition,
+        "related-to" => ChangeRelationKind::RelatedTo,
+        _ => {
+            return Err(CliError::usage(
+                "relation kind must be task-decomposition or related-to",
+            ));
+        }
+    };
+    let audit = AuditContext::new(actor, at).map_err(|error| CliError::usage(error.to_string()))?;
+    let source = ChangeId::new(source).map_err(|error| CliError::usage(error.to_string()))?;
+    let target = ChangeId::new(target).map_err(|error| CliError::usage(error.to_string()))?;
+    repository
+        .add_change_relation(&source, &target, kind, &audit)
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    Ok(format!(
+        "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"relation\",\"sourceChangeId\":\"{}\",\"targetChangeId\":\"{}\"}}",
+        escape(source.as_str()),
+        escape(target.as_str())
+    ))
 }
 
 fn reconcile_integration(
