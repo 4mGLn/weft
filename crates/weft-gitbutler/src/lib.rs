@@ -106,6 +106,16 @@ impl GitButlerRepository {
             .find(|branch| branch.name == name)
             .ok_or(GitButlerError::MalformedOutput)
     }
+    /// Amends a virtual branch and returns its refreshed provider reference.
+    /// # Errors
+    /// Returns an error when `GitButler` fails or the branch cannot be observed.
+    pub fn amend_virtual_branch(&self, name: &str) -> Result<GitButlerBranch, GitButlerError> {
+        run("but", &self.root, ["amend", "-t", name])?;
+        self.branches()?
+            .into_iter()
+            .find(|branch| branch.name == name)
+            .ok_or(GitButlerError::MalformedOutput)
+    }
 }
 fn json_string_after(raw: &str, anchor: &str, key: &str) -> Result<String, GitButlerError> {
     let start = raw.find(anchor).ok_or(GitButlerError::MalformedOutput)?;
