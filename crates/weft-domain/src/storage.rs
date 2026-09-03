@@ -375,6 +375,26 @@ impl IntegrationConflict {
                 .transpose()?,
         })
     }
+    #[must_use]
+    pub fn id(&self) -> &ConflictId {
+        &self.id
+    }
+    #[must_use]
+    pub fn integration_id(&self) -> &IntegrationId {
+        &self.integration_id
+    }
+    #[must_use]
+    pub fn candidate_id(&self) -> &CandidateId {
+        &self.candidate_id
+    }
+    #[must_use]
+    pub fn provider_state(&self) -> &str {
+        &self.provider_state
+    }
+    #[must_use]
+    pub fn attempted_operation(&self) -> &str {
+        &self.attempted_operation
+    }
 }
 impl DomainEvent {
     /// # Errors
@@ -3029,6 +3049,50 @@ impl SqliteRepository {
         )?;
         transaction.commit()?;
         Ok(())
+    }
+
+    /// Lists durable provider integration conflicts in identity order.
+    /// # Errors
+    /// Returns an error for malformed persisted conflict metadata or `SQLite` failure.
+    pub fn integration_conflicts(&self) -> Result<Vec<IntegrationConflict>, StorageError> {
+        let mut statement = self.connection.prepare(
+            "SELECT conflict_id, integration_id, candidate_id, provider_state, attempted_operation, resolver, resulting_target, validation_evidence FROM integration_conflicts ORDER BY conflict_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (
+                id,
+                integration,
+                candidate,
+                provider_state,
+                operation,
+                resolver,
+                target,
+                validation,
+            ) = row?;
+            IntegrationConflict::new(
+                ConflictId::new(id)?,
+                IntegrationId::new(integration)?,
+                CandidateId::new(candidate)?,
+                provider_state,
+                operation,
+                resolver,
+                target,
+                validation,
+            )
+        })
+        .collect()
     }
 
     /// Records reconciliation evidence for a running or terminal integration attempt.

@@ -29,6 +29,11 @@ weft [--state DIR] change assign CHANGE --assignment ID --subject SUBJECT \
   --role ROLE --actor ACTOR --at UNIX_MS --json
 weft [--state DIR] change acquire CHANGE --operation OPERATION --holder HOLDER \
   --now UNIX_MS --expires UNIX_MS --json
+weft [--state DIR] change renew CHANGE --operation OPERATION --now UNIX_MS \
+  --expires UNIX_MS --json
+weft [--state DIR] change release CHANGE --operation OPERATION --now UNIX_MS --json
+weft [--state DIR] change handoff CHANGE --assignment ID --to SUBJECT --actor ACTOR \
+  --at UNIX_MS --json
 weft [--state DIR] dependency add UPSTREAM@REVISION DOWNSTREAM --json
 weft [--state DIR] stack create STACK CHANGE... --json
 weft [--state DIR] stack revise STACK EXPECTED_VERSION CHANGE... --json
@@ -52,6 +57,7 @@ weft [--state DIR] integrate run ID --repository PATH --destination PATH \
   --receipt-id ID --conflict-id ID --reconciliation-id ID --now UNIX_MS --yes --json
 weft [--state DIR] reconcile integration ID --repository PATH --expected-result COMMIT \
   --receipt-id ID --reconciliation-id ID --actor ACTOR --at UNIX_MS --json
+weft [--state DIR] conflict list --json
 weft [--state DIR] history CHANGE --json
 ```
 

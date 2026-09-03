@@ -174,6 +174,9 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
             &arguments[4..],
         );
     }
+    if arguments.len() == 2 && arguments[0] == "conflict" && arguments[1] == "list" {
+        return list_conflicts(&repository);
+    }
     match arguments.as_slice() {
         [command] if command == "status" => Ok(format!(
             "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"status\",\"stateDirectory\":\"{}\"}}",
@@ -206,6 +209,20 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
             "expected `status`, `change create <id>`, or `change show <id>`",
         )),
     }
+}
+
+fn list_conflicts(repository: &SqliteRepository) -> Result<String, CliError> {
+    let conflicts = repository
+        .integration_conflicts()
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    let conflicts = conflicts
+        .iter()
+        .map(|conflict| format!("{{\"conflictId\":\"{}\",\"integrationId\":\"{}\",\"candidateId\":\"{}\",\"providerState\":\"{}\",\"operation\":\"{}\"}}", escape(conflict.id().as_str()), escape(conflict.integration_id().as_str()), escape(conflict.candidate_id().as_str()), escape(conflict.provider_state()), escape(conflict.attempted_operation())))
+        .collect::<Vec<_>>()
+        .join(",");
+    Ok(format!(
+        "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"conflicts\",\"conflicts\":[{conflicts}]}}"
+    ))
 }
 
 fn handoff(
