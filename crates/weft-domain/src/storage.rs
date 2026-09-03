@@ -1436,6 +1436,14 @@ impl SqliteRepository {
             "INSERT INTO audit_events(change_id, kind, detail) VALUES (?1, ?2, ?3)",
             params![change_id.as_str(), "lease-acquired", operation],
         )?;
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('lease-acquired', ?1, ?2, 'unheld-or-expired', 'held', ?3, NULL, NULL)",
+            params![
+                holder,
+                now_unix_ms,
+                format!("{}:{}", change_id.as_str(), operation),
+            ],
+        )?;
         transaction.commit()?;
         Ok(Lease {
             change_id: change_id.clone(),
@@ -1457,13 +1465,25 @@ impl SqliteRepository {
         if expires_at_unix_ms <= now_unix_ms {
             return Err(StorageError::InvalidLeaseExpiry);
         }
-        let updated = self.connection.execute(
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let updated = transaction.execute(
             "UPDATE leases SET expires_at_unix_ms = ?1 WHERE change_id = ?2 AND operation = ?3 AND holder = ?4 AND expires_at_unix_ms > ?5",
             params![expires_at_unix_ms, lease.change_id.as_str(), lease.operation, lease.holder, now_unix_ms],
         )?;
         if updated != 1 {
             return Err(StorageError::LeaseLost);
         }
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('lease-renewed', ?1, ?2, 'held', 'held', ?3, NULL, NULL)",
+            params![
+                lease.holder,
+                now_unix_ms,
+                format!("{}:{}", lease.change_id.as_str(), lease.operation),
+            ],
+        )?;
+        transaction.commit()?;
         Ok(Lease {
             change_id: lease.change_id.clone(),
             operation: lease.operation.clone(),
@@ -1475,14 +1495,26 @@ impl SqliteRepository {
     /// Releases an active lease only for its current holder.
     /// # Errors
     /// Returns an error when the lease was lost or already released.
-    pub fn release_lease(&mut self, lease: &Lease) -> Result<(), StorageError> {
-        let deleted = self.connection.execute(
+    pub fn release_lease(&mut self, lease: &Lease, now_unix_ms: i64) -> Result<(), StorageError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let deleted = transaction.execute(
             "DELETE FROM leases WHERE change_id = ?1 AND operation = ?2 AND holder = ?3",
             params![lease.change_id.as_str(), lease.operation, lease.holder],
         )?;
         if deleted != 1 {
             return Err(StorageError::LeaseLost);
         }
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('lease-released', ?1, ?2, 'held', 'unheld', ?3, NULL, NULL)",
+            params![
+                lease.holder,
+                now_unix_ms,
+                format!("{}:{}", lease.change_id.as_str(), lease.operation),
+            ],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -3205,7 +3237,7 @@ mod tests {
         assert_eq!(
             connection
                 .query_row(
-                    "SELECT actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence FROM domain_events",
+                    "SELECT actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence FROM domain_events WHERE kind = 'integration-started'",
                     [],
                     |row| Ok((
                         row.get::<_, String>(0)?,
@@ -3386,9 +3418,9 @@ mod tests {
             repository.renew_lease(&renewed, 300, 400),
             Err(StorageError::LeaseLost)
         ));
-        repository.release_lease(&renewed).unwrap();
+        repository.release_lease(&renewed, 200).unwrap();
         assert!(matches!(
-            repository.release_lease(&renewed),
+            repository.release_lease(&renewed, 201),
             Err(StorageError::LeaseLost)
         ));
         assert_eq!(
@@ -3397,6 +3429,15 @@ mod tests {
                 .unwrap()
                 .holder(),
             "agent-b"
+        );
+        assert_eq!(
+            domain_event_kinds(&repository.connection),
+            vec![
+                "lease-acquired",
+                "lease-renewed",
+                "lease-released",
+                "lease-acquired"
+            ]
         );
         fs::remove_dir_all(root).unwrap();
     }
