@@ -116,6 +116,20 @@ impl GitButlerRepository {
             .find(|branch| branch.name == name)
             .ok_or(GitButlerError::MalformedOutput)
     }
+
+    /// Creates a virtual branch anchored above an existing branch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `GitButler` rejects the anchor.
+    pub fn create_stacked_branch(&self, name: &str, anchor: &str) -> Result<(), GitButlerError> {
+        run(
+            "but",
+            &self.root,
+            ["branch", "new", name, "--anchor", anchor],
+        )
+        .map(|_| ())
+    }
 }
 fn json_string_after(raw: &str, anchor: &str, key: &str) -> Result<String, GitButlerError> {
     let start = raw.find(anchor).ok_or(GitButlerError::MalformedOutput)?;
