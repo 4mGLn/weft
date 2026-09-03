@@ -106,3 +106,63 @@ impl Display for NativeGitError {
     }
 }
 impl std::error::Error for NativeGitError {}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::*;
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    fn temporary_repository() -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "weft-native-git-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&path).unwrap();
+        for args in [
+            vec!["init", "--quiet"],
+            vec!["config", "user.name", "Weft test"],
+            vec!["config", "user.email", "test@weft.invalid"],
+            vec!["config", "commit.gpgSign", "false"],
+        ] {
+            let status = Command::new("git")
+                .args(args)
+                .current_dir(&path)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+        fs::write(path.join("README"), "base\n").unwrap();
+        for args in [
+            vec!["add", "README"],
+            vec!["commit", "--quiet", "-m", "base"],
+        ] {
+            let status = Command::new("git")
+                .args(args)
+                .current_dir(&path)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+        path
+    }
+
+    #[test]
+    fn discovers_and_resolves_exact_head() {
+        let path = temporary_repository();
+        let repository = NativeGitRepository::discover(&path).unwrap();
+        let expected = run_git(&path, ["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(repository.resolve_commit("HEAD").unwrap(), expected);
+        assert!(
+            repository
+                .repository_id()
+                .as_str()
+                .starts_with("native-git:")
+        );
+        fs::remove_dir_all(path).unwrap();
+    }
+}
