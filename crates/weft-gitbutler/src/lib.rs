@@ -144,6 +144,16 @@ impl GitButlerRepository {
         )
         .map(|_| ())
     }
+
+    /// Reconciles `GitButler` workspace state with its configured target.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `GitButler` cannot complete reconciliation.
+    pub fn reconcile_target(&self) -> Result<GitButlerStatus, GitButlerError> {
+        run("but", &self.root, ["pull"])?;
+        self.status()
+    }
 }
 fn json_string_after(raw: &str, anchor: &str, key: &str) -> Result<String, GitButlerError> {
     let start = raw.find(anchor).ok_or(GitButlerError::MalformedOutput)?;
