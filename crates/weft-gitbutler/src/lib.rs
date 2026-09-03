@@ -556,6 +556,12 @@ impl std::error::Error for GitButlerError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use weft_domain::{
+        CandidateId, CandidateInput, ChangeId, IntegrationId, OperationId, RevisionId,
+    };
     #[test]
     fn projects_a_virtual_branch_from_the_supported_status_shape() {
         let raw = r#"{"mergeBase":{"commitId":"base"},"upstreamState":{"latestCommit":{"commitId":"target"}},"stacks":[{"branches":[{"name":"change-a","commits":[{"changeId":"logical-a","commitId":"provider-a","conflicted": false}]},{"name":"change-b","commits":[{"changeId":"logical-b","commitId":"provider-b","conflicted": true}]}]}]}"#;
@@ -586,5 +592,99 @@ mod tests {
         );
         assert!(json_string_after("{}", "mergeBase", "commitId").is_err());
         assert!(json_bool_after("{}", "name", "conflicted").is_err());
+    }
+
+    #[test]
+    #[ignore = "requires a supported GitButler CLI"]
+    fn lands_a_virtual_branch_with_a_durable_receipt_after_restart() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("weft-gitbutler-{nonce}"));
+        assert!(
+            Command::new("but")
+                .args(["-C", root.to_str().unwrap(), "setup", "--init"])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let provider = GitButlerRepository::discover(&root).unwrap();
+        let base = provider.status().unwrap().target;
+        fs::write(root.join("durable.txt"), "GitButler durable landing\n").unwrap();
+        assert!(
+            Command::new("but")
+                .args([
+                    "-C",
+                    root.to_str().unwrap(),
+                    "commit",
+                    "-b",
+                    "durable-change",
+                    "-m",
+                    "durable change",
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let store = ContentStore::open(root.join("weft-content")).unwrap();
+        let (_, artifact) = provider
+            .export_branch_artifact(&base, "durable-change", &store)
+            .unwrap();
+        let database = root.join("weft.sqlite");
+        let mut domain = SqliteRepository::open(&database, store.clone()).unwrap();
+        let change = ChangeId::new("change-1").unwrap();
+        let revision = RevisionId::new("revision-1").unwrap();
+        let candidate = CandidateId::new("candidate-1").unwrap();
+        domain.create_change(change.clone()).unwrap();
+        domain
+            .append_revision(&change, None, revision.clone(), &artifact)
+            .unwrap();
+        domain
+            .create_candidate(
+                candidate.clone(),
+                artifact.base().clone(),
+                vec![CandidateInput::new(change.clone(), revision)],
+            )
+            .unwrap();
+        let audit = AuditContext::new("agent", 10).unwrap();
+        domain
+            .acquire_lease(&change, "integrate", "agent", 10, 100)
+            .unwrap();
+        let attempt = IntegrationAttempt::new(
+            IntegrationId::new("integration-1").unwrap(),
+            provider.repository_id().clone(),
+            candidate,
+            "configured-target",
+            base.clone(),
+            "gitbutler",
+            "whole-stack",
+            OperationId::new("operation-1").unwrap(),
+            "agent",
+        )
+        .unwrap();
+        domain.plan_integration(&attempt, &audit).unwrap();
+        let receipt = provider
+            .execute_integration(
+                &mut domain,
+                &attempt,
+                "durable-change",
+                IntegrationReceiptId::new("receipt-1").unwrap(),
+                ConflictId::new("conflict-1").unwrap(),
+                ReconciliationId::new("reconciliation-1").unwrap(),
+                &audit,
+                20,
+            )
+            .unwrap();
+        assert_ne!(receipt.prior_target(), receipt.result_target());
+        drop(domain);
+        let reopened = SqliteRepository::open(&database, store).unwrap();
+        assert_eq!(
+            reopened
+                .integration_state(&IntegrationId::new("integration-1").unwrap())
+                .unwrap(),
+            IntegrationState::Succeeded
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }

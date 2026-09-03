@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 3 — GitButler provider.
+Phase 4 — CLI.
 
 ## Completed
 
@@ -62,18 +62,21 @@ Phase 3 — GitButler provider.
 - Added canonical GitButler branch export through the established Native Git
   artifact boundary. GitButler IDs remain supplemental provider references while
   the artifact retains only exact base-bound canonical content.
+- Completed Phase 3 GitButler provider acceptance: a supported live GitButler
+  workspace proves canonical export, leased whole-stack landing, a verified
+  durable receipt, and SQLite restart recovery. Unverified landing remains an
+  explicit reconciliation requirement rather than a success claim.
 
 ## Next checkpoint
 
-Implement durable GitButler integration execution with an exact observed target,
-verified receipt or explicit conflict/uncertain outcome, and restart-safe
-reconciliation. Add a reproducible provider fixture that proves canonical export
-and recovery against a live supported `but` CLI.
+Define the stable CLI command surface and JSON schemas, then expose the durable
+Change/revision lifecycle through noninteractive commands with explicit expected
+versions and operation IDs.
 
 ## Known gaps
 
 - No provider runtime implementation or stable CLI.
-- GitButler provider removal/reconnect, durable landing receipts, and
-  crash-uncertain landing remain unproven implementation gates.
+- GitButler provider removal/reconnect and fault-injected process death during
+  landing remain explicitly unsupported provider capabilities.
 - No runtime packaging or deployment support.
 - No software license selected.
