@@ -2050,10 +2050,10 @@ impl SqliteRepository {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let row: Option<(String, String, String, String)> = transaction.query_row(
-            "SELECT expected_target_revision, state, candidate_id, actor FROM integration_attempts WHERE integration_id = ?1", [integration_id.as_str()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        let row: Option<(String, String, String, String, String)> = transaction.query_row(
+            "SELECT expected_target_revision, state, candidate_id, actor, operation_id FROM integration_attempts WHERE integration_id = ?1", [integration_id.as_str()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         ).optional()?;
-        let (expected, state, candidate, actor) =
+        let (expected, state, candidate, actor, operation_id) =
             row.ok_or_else(|| StorageError::MissingIntegration(integration_id.clone()))?;
         if expected != observed_target {
             return Err(StorageError::StaleTarget {
@@ -2064,7 +2064,7 @@ impl SqliteRepository {
         if IntegrationState::parse(&state)? != IntegrationState::Planned {
             return Err(StorageError::InvalidIntegrationTransition);
         }
-        for input in candidate_inputs(&transaction, &CandidateId::new(candidate)?)? {
+        for input in candidate_inputs(&transaction, &CandidateId::new(&candidate)?)? {
             let lease: Option<(String, i64)> = transaction.query_row(
                 "SELECT holder, expires_at_unix_ms FROM leases WHERE change_id = ?1 AND operation = 'integrate'",
                 [input.change_id().as_str()], |row| Ok((row.get(0)?, row.get(1)?)),
@@ -2085,6 +2085,16 @@ impl SqliteRepository {
                 "integration changed during immediate transaction",
             ));
         }
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('integration-started', ?1, ?2, 'planned', 'running', ?3, ?4, ?5)",
+            params![
+                actor,
+                now_unix_ms,
+                format!("{},{}", integration_id.as_str(), candidate),
+                operation_id,
+                format!("provider-observed-target:{observed_target}"),
+            ],
+        )?;
         transaction.commit()?;
         Ok(())
     }
@@ -2905,6 +2915,35 @@ mod tests {
         )
     }
 
+    fn assert_integration_started_event(connection: &Connection) {
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence FROM domain_events",
+                    [],
+                    |row| Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                    )),
+                )
+                .unwrap(),
+            (
+                "agent-1".to_owned(),
+                100,
+                "planned".to_owned(),
+                "running".to_owned(),
+                "integration-1,candidate-1".to_owned(),
+                "operation-1".to_owned(),
+                "provider-observed-target:target-r1".to_owned(),
+            )
+        );
+    }
+
     #[test]
     fn persists_and_reopens_verified_canonical_artifacts() {
         let root = temporary_directory();
@@ -3671,6 +3710,7 @@ mod tests {
             repository
                 .start_integration(&integration_id, "target-r1", 100)
                 .unwrap();
+            assert_integration_started_event(&repository.connection);
             assert!(matches!(
                 repository.finish_integration(&integration_id, IntegrationState::Succeeded, None),
                 Err(StorageError::SuccessRequiresReceipt)
@@ -3790,6 +3830,7 @@ mod tests {
                 .unwrap(),
             "running"
         );
+        assert_integration_started_event(&repository.connection);
         fs::remove_dir_all(root).unwrap();
     }
 
