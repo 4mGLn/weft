@@ -72,26 +72,9 @@ impl GitButlerRepository {
     /// Returns an error for a CLI failure or unsupported branch shape.
     pub fn branches(&self) -> Result<Vec<GitButlerBranch>, GitButlerError> {
         let raw = run("but", &self.root, ["--json", "status"])?;
-        let mut result = Vec::new();
-        let mut rest = raw.as_str();
-        while let Some(at) = rest.find("\"name\"") {
-            rest = &rest[at..];
-            let name = json_string_after(rest, "name", "name")?;
-            let change_id = json_string_after(rest, "name", "changeId")?;
-            let commit_id = json_string_after(rest, "name", "commitId")?;
-            let conflicted = rest
-                .find("\"conflicted\":true")
-                .is_some_and(|flag| flag < rest.find("\"name\"").unwrap_or(usize::MAX));
-            result.push(GitButlerBranch {
-                name,
-                change_id,
-                commit_id,
-                conflicted,
-            });
-            rest = &rest[6..];
-        }
-        Ok(result)
+        branches_from_status(&raw)
     }
+
     /// Creates a virtual branch commit from the current workspace changes.
     /// # Errors
     /// Returns an error when the CLI fails or the resulting branch is absent.
@@ -155,6 +138,27 @@ impl GitButlerRepository {
         self.status()
     }
 }
+
+fn branches_from_status(raw: &str) -> Result<Vec<GitButlerBranch>, GitButlerError> {
+    let mut result = Vec::new();
+    let mut rest = raw;
+    while let Some(at) = rest.find("\"name\"") {
+        rest = &rest[at..];
+        let name = json_string_after(rest, "name", "name")?;
+        let change_id = json_string_after(rest, "name", "changeId")?;
+        let commit_id = json_string_after(rest, "name", "commitId")?;
+        let conflicted = json_bool_after(rest, "name", "conflicted")?;
+        result.push(GitButlerBranch {
+            name,
+            change_id,
+            commit_id,
+            conflicted,
+        });
+        rest = &rest[6..];
+    }
+    Ok(result)
+}
+
 fn json_string_after(raw: &str, anchor: &str, key: &str) -> Result<String, GitButlerError> {
     let start = raw.find(anchor).ok_or(GitButlerError::MalformedOutput)?;
     let field = raw[start..]
@@ -171,6 +175,28 @@ fn json_string_after(raw: &str, anchor: &str, key: &str) -> Result<String, GitBu
         return Err(GitButlerError::MalformedOutput);
     }
     Ok(value)
+}
+
+fn json_bool_after(raw: &str, anchor: &str, key: &str) -> Result<bool, GitButlerError> {
+    let start = raw.find(anchor).ok_or(GitButlerError::MalformedOutput)?;
+    let field = raw[start..]
+        .find(key)
+        .ok_or(GitButlerError::MalformedOutput)?
+        + start
+        + key.len();
+    let value_start = raw[field..]
+        .find(':')
+        .ok_or(GitButlerError::MalformedOutput)?
+        + field
+        + 1;
+    let value = raw[value_start..].trim_start();
+    if value.starts_with("true") {
+        Ok(true)
+    } else if value.starts_with("false") {
+        Ok(false)
+    } else {
+        Err(GitButlerError::MalformedOutput)
+    }
 }
 fn run<const N: usize>(
     program: &str,
@@ -224,11 +250,7 @@ mod tests {
     use super::*;
     #[test]
     fn projects_a_virtual_branch_from_the_supported_status_shape() {
-        let raw = r#"{"mergeBase":{"commitId":"base"},"upstreamState":{"latestCommit":{"commitId":"target"}},"stacks":[{"branches":[{"name":"change-a","commits":[{"changeId":"logical","commitId":"provider","conflicted":false}]}]}]}"#;
-        let repository = GitButlerRepository {
-            root: PathBuf::new(),
-            repository_id: RepositoryId::new("repo").unwrap(),
-        };
+        let raw = r#"{"mergeBase":{"commitId":"base"},"upstreamState":{"latestCommit":{"commitId":"target"}},"stacks":[{"branches":[{"name":"change-a","commits":[{"changeId":"logical-a","commitId":"provider-a","conflicted": false}]},{"name":"change-b","commits":[{"changeId":"logical-b","commitId":"provider-b","conflicted": true}]}]}]}"#;
         assert_eq!(
             json_string_after(raw, "mergeBase", "commitId").unwrap(),
             "base"
@@ -237,7 +259,24 @@ mod tests {
             json_string_after(raw, "latestCommit", "commitId").unwrap(),
             "target"
         );
-        let _ = repository;
+        assert_eq!(
+            branches_from_status(raw).unwrap(),
+            vec![
+                GitButlerBranch {
+                    name: "change-a".to_owned(),
+                    change_id: "logical-a".to_owned(),
+                    commit_id: "provider-a".to_owned(),
+                    conflicted: false,
+                },
+                GitButlerBranch {
+                    name: "change-b".to_owned(),
+                    change_id: "logical-b".to_owned(),
+                    commit_id: "provider-b".to_owned(),
+                    conflicted: true,
+                },
+            ]
+        );
         assert!(json_string_after("{}", "mergeBase", "commitId").is_err());
+        assert!(json_bool_after("{}", "name", "conflicted").is_err());
     }
 }
