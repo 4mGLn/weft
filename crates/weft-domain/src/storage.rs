@@ -1609,6 +1609,27 @@ impl SqliteRepository {
         Ok(false)
     }
 
+    /// Reports whether an exact review/validation target has been superseded.
+    /// # Errors
+    /// Returns an error for a missing target or corrupt persisted identity.
+    pub fn target_is_stale(&self, target: &Target) -> Result<bool, StorageError> {
+        match target {
+            Target::Candidate(id) => self.candidate_is_stale(id),
+            Target::Revision(id) => {
+                let change: String = self
+                    .connection
+                    .query_row(
+                        "SELECT change_id FROM revisions WHERE revision_id = ?1",
+                        [id.as_str()],
+                        |row| row.get(0),
+                    )
+                    .optional()?
+                    .ok_or_else(|| StorageError::MissingRevision(id.clone()))?;
+                Ok(self.load_change(&ChangeId::new(change)?)?.head() != Some(id))
+            }
+        }
+    }
+
     /// Records an immutable assignment event for an existing Change.
     ///
     /// # Errors
@@ -3251,6 +3272,39 @@ mod tests {
                     .get::<_, i64>(0))
                 .unwrap(),
             1
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn marks_revision_targets_stale_after_head_advances() {
+        let root = temporary_directory();
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let artifact = artifact(&store);
+        let mut repository = SqliteRepository::open(root.join("weft.sqlite"), store).unwrap();
+        let change = ChangeId::new("change-1").unwrap();
+        let first = RevisionId::new("revision-1").unwrap();
+        repository.create_change(change.clone()).unwrap();
+        repository
+            .append_revision(&change, None, first.clone(), &artifact)
+            .unwrap();
+        assert!(
+            !repository
+                .target_is_stale(&Target::Revision(first.clone()))
+                .unwrap()
+        );
+        repository
+            .append_revision(
+                &change,
+                Some(&first),
+                RevisionId::new("revision-2").unwrap(),
+                &artifact,
+            )
+            .unwrap();
+        assert!(
+            repository
+                .target_is_stale(&Target::Revision(first))
+                .unwrap()
         );
         fs::remove_dir_all(root).unwrap();
     }
