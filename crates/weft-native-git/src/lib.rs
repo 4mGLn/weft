@@ -332,28 +332,7 @@ impl NativeGitRepository {
             ["worktree", "add", "--detach", destination_text, base_commit],
         )?;
 
-        for operation in artifact.tree_delta().operations() {
-            if let PathOperation::Delete { path } = operation {
-                remove_path(destination, path)?;
-            }
-        }
-        for operation in artifact.tree_delta().operations() {
-            if let PathOperation::Upsert {
-                path,
-                mode,
-                blob_digest,
-            } = operation
-            {
-                write_path(
-                    destination,
-                    path,
-                    *mode,
-                    &content_store
-                        .read_blob(blob_digest)
-                        .map_err(NativeGitError::Storage)?,
-                )?;
-            }
-        }
+        apply_artifact_operations(destination, artifact, content_store)?;
         run_git_bytes(destination, ["add", "--all"])?;
         let tree_id = run_git(destination, ["write-tree"])?;
         Ok(NativeGitMaterialization {
@@ -362,6 +341,112 @@ impl NativeGitRepository {
             tree_id,
         })
     }
+
+    /// Materializes ordered canonical artifacts into one detached worktree.
+    ///
+    /// A later artifact is applied only where the staged tree still matches
+    /// its recorded exact base. Tree deltas contain no merge preimages, so an
+    /// overlapping divergent path is an explicit conflict, never a guessed
+    /// provider merge.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NativeGitError::CompositionConflict`] with sorted paths when
+    /// earlier inputs have changed a later input's base-relative paths.
+    pub fn compose_artifacts(
+        &self,
+        artifacts: &[CanonicalArtifact],
+        content_store: &ContentStore,
+        destination: impl AsRef<Path>,
+    ) -> Result<NativeGitMaterialization, NativeGitError> {
+        let (first, rest) = artifacts
+            .split_first()
+            .ok_or(NativeGitError::EmptyComposition)?;
+        let mut materialization = self.materialize_artifact(first, content_store, destination)?;
+        for artifact in rest {
+            if artifact.base().repository_id() != &self.repository_id {
+                return Err(NativeGitError::RepositoryMismatch);
+            }
+            let base_commit = artifact
+                .base()
+                .object_id()
+                .strip_prefix("git:")
+                .ok_or(NativeGitError::InvalidBaseObject)?;
+            if self.resolve_commit(base_commit)? != base_commit {
+                return Err(NativeGitError::InvalidBaseObject);
+            }
+            let changed = staged_paths_against(materialization.path(), base_commit)?;
+            let artifact_paths = artifact
+                .tree_delta()
+                .operations()
+                .iter()
+                .map(PathOperation::path)
+                .collect::<BTreeSet<_>>();
+            let conflicts = changed
+                .into_iter()
+                .filter(|path| artifact_paths.contains(path.as_str()))
+                .collect::<Vec<_>>();
+            if !conflicts.is_empty() {
+                return Err(NativeGitError::CompositionConflict(conflicts));
+            }
+            apply_artifact_operations(materialization.path(), artifact, content_store)?;
+            run_git_bytes(materialization.path(), ["add", "--all"])?;
+            materialization.tree_id = run_git(materialization.path(), ["write-tree"])?;
+        }
+        Ok(materialization)
+    }
+}
+
+fn apply_artifact_operations(
+    destination: &Path,
+    artifact: &CanonicalArtifact,
+    content_store: &ContentStore,
+) -> Result<(), NativeGitError> {
+    for operation in artifact.tree_delta().operations() {
+        if let PathOperation::Delete { path } = operation {
+            remove_path(destination, path)?;
+        }
+    }
+    for operation in artifact.tree_delta().operations() {
+        if let PathOperation::Upsert {
+            path,
+            mode,
+            blob_digest,
+        } = operation
+        {
+            let content = content_store
+                .read_blob(blob_digest)
+                .map_err(NativeGitError::Storage)?;
+            write_path(destination, path, *mode, &content)?;
+        }
+    }
+    Ok(())
+}
+
+fn staged_paths_against(
+    worktree: &Path,
+    base_commit: &str,
+) -> Result<BTreeSet<String>, NativeGitError> {
+    let output = run_git_bytes(
+        worktree,
+        [
+            "diff",
+            "--cached",
+            "--no-renames",
+            "--name-only",
+            "-z",
+            base_commit,
+        ],
+    )?;
+    output
+        .split(|byte| *byte == b'\0')
+        .filter(|path| !path.is_empty())
+        .map(|path| {
+            std::str::from_utf8(path)
+                .map(str::to_owned)
+                .map_err(NativeGitError::PathEncoding)
+        })
+        .collect()
 }
 
 fn remove_path(root: &Path, relative: &str) -> Result<(), NativeGitError> {
@@ -468,6 +553,8 @@ pub enum NativeGitError {
     InvalidDestination,
     DestinationExists(PathBuf),
     UnsupportedPlatform,
+    EmptyComposition,
+    CompositionConflict(Vec<String>),
 }
 impl Display for NativeGitError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -490,6 +577,10 @@ impl Display for NativeGitError {
             }
             Self::UnsupportedPlatform => {
                 f.write_str("native worktree materialization requires Unix file modes and symlinks")
+            }
+            Self::EmptyComposition => f.write_str("composition requires at least one artifact"),
+            Self::CompositionConflict(paths) => {
+                write!(f, "canonical artifacts conflict at: {}", paths.join(", "))
             }
         }
     }
@@ -566,6 +657,32 @@ mod tests {
             assert!(status.success());
         }
         path
+    }
+
+    fn commit_files(path: &Path, message: &str, files: &[&str]) {
+        let status = Command::new("git")
+            .arg("add")
+            .args(files)
+            .current_dir(path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let status = Command::new("git")
+            .args(["commit", "--quiet", "-m", message])
+            .current_dir(path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    fn remove_worktree(repository: &Path, destination: &Path) {
+        let status = Command::new("git")
+            .args(["worktree", "remove", "--force"])
+            .arg(destination)
+            .current_dir(repository)
+            .status()
+            .unwrap();
+        assert!(status.success());
     }
 
     #[test]
@@ -648,6 +765,95 @@ mod tests {
             repository.overlapping_paths(&base, &left, &right).unwrap(),
             ["shared"]
         );
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn composes_disjoint_artifacts_and_reports_ambiguous_paths() {
+        let path = temporary_repository();
+        let base = run_git(&path, ["rev-parse", "HEAD"]).unwrap();
+        fs::write(path.join("a"), "a\n").unwrap();
+        commit_files(&path, "a", &["a"]);
+        let a = run_git(&path, ["rev-parse", "HEAD"]).unwrap();
+        let status = Command::new("git")
+            .args(["checkout", "--quiet", "-b", "candidate-b", &base])
+            .current_dir(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        fs::write(path.join("b"), "b\n").unwrap();
+        commit_files(&path, "b", &["b"]);
+        let b = run_git(&path, ["rev-parse", "HEAD"]).unwrap();
+        let repository = NativeGitRepository::discover(&path).unwrap();
+        let store = ContentStore::open(path.join("weft-content")).unwrap();
+        let artifact_a = repository.capture_revision(&base, &a, &store).unwrap();
+        let artifact_b = repository.capture_revision(&base, &b, &store).unwrap();
+
+        let status = Command::new("git")
+            .args(["checkout", "--quiet", "-b", "candidate-expected", &base])
+            .current_dir(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        fs::write(path.join("a"), "a\n").unwrap();
+        fs::write(path.join("b"), "b\n").unwrap();
+        commit_files(&path, "expected", &["a", "b"]);
+        let expected_tree = run_git(&path, ["rev-parse", "HEAD^{tree}"]).unwrap();
+        let destination = path.with_file_name(format!(
+            "weft-native-git-compose-{}",
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let composition = repository
+            .compose_artifacts(&[artifact_a.clone(), artifact_b], &store, &destination)
+            .unwrap();
+        assert_eq!(composition.tree_id(), expected_tree);
+        remove_worktree(&path, &destination);
+
+        let status = Command::new("git")
+            .args([
+                "checkout",
+                "--quiet",
+                "-b",
+                "candidate-conflict-left",
+                &base,
+            ])
+            .current_dir(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        fs::write(path.join("README"), "left\n").unwrap();
+        commit_files(&path, "conflict left", &["README"]);
+        let left = run_git(&path, ["rev-parse", "HEAD"]).unwrap();
+        let artifact_left = repository.capture_revision(&base, &left, &store).unwrap();
+        let status = Command::new("git")
+            .args([
+                "checkout",
+                "--quiet",
+                "-b",
+                "candidate-conflict-right",
+                &base,
+            ])
+            .current_dir(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        fs::write(path.join("README"), "right\n").unwrap();
+        commit_files(&path, "conflict right", &["README"]);
+        let right = run_git(&path, ["rev-parse", "HEAD"]).unwrap();
+        let artifact_right = repository.capture_revision(&base, &right, &store).unwrap();
+        let conflict_destination = path.with_file_name(format!(
+            "weft-native-git-conflict-{}",
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        assert!(matches!(
+            repository.compose_artifacts(
+                &[artifact_left, artifact_right],
+                &store,
+                &conflict_destination,
+            ),
+            Err(NativeGitError::CompositionConflict(paths)) if paths == ["README"]
+        ));
+        remove_worktree(&path, &conflict_destination);
         fs::remove_dir_all(path).unwrap();
     }
 
