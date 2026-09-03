@@ -303,7 +303,10 @@ fn write_path(
     mode: FileMode,
     content: &[u8],
 ) -> Result<(), NativeGitError> {
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::{
+        ffi::OsStrExt,
+        fs::{PermissionsExt, symlink},
+    };
 
     let path = root.join(relative);
     if let Some(parent) = path.parent() {
@@ -329,8 +332,7 @@ fn write_path(
                 .map_err(NativeGitError::Io)
         }
         FileMode::SymbolicLink => {
-            let target = std::str::from_utf8(content).map_err(NativeGitError::PathEncoding)?;
-            symlink(target, path).map_err(NativeGitError::Io)
+            symlink(std::ffi::OsStr::from_bytes(content), path).map_err(NativeGitError::Io)
         }
     }
 }
@@ -441,7 +443,7 @@ mod tests {
             PathOperation::Upsert {
                 path: "link".to_owned(),
                 mode: FileMode::SymbolicLink,
-                blob_digest: weft_domain::sha256_digest(b"binary.dat"),
+                blob_digest: weft_domain::sha256_digest(b"target-\xff"),
             },
             PathOperation::Upsert {
                 path: "script".to_owned(),
@@ -519,7 +521,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn captures_canonical_content_and_modes_from_exact_git_trees() {
-        use std::os::unix::fs::{PermissionsExt, symlink};
+        use std::os::unix::{
+            ffi::OsStrExt,
+            fs::{PermissionsExt, symlink},
+        };
 
         let path = temporary_repository();
         fs::write(path.join("delete.txt"), "remove me\n").unwrap();
@@ -544,7 +549,11 @@ mod tests {
         let mut permissions = fs::metadata(path.join("script")).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(path.join("script"), permissions).unwrap();
-        symlink("binary.dat", path.join("link")).unwrap();
+        symlink(
+            std::ffi::OsStr::from_bytes(b"target-\xff"),
+            path.join("link"),
+        )
+        .unwrap();
         fs::write(path.join("README"), "updated\n").unwrap();
         let status = Command::new("git")
             .args(["add", "--all"])

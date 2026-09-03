@@ -52,9 +52,11 @@ Phase 2 — Native Git provider.
 
 ## Next checkpoint
 
-Implement Native Git repository discovery, exact inspection, canonical capture
-and reconstruction, materialization, composition, guarded integration, receipt,
-conflict, and external-state reconciliation through the reusable API.
+Implement Native Git diff/overlap inspection, candidate composition, guarded
+integration, receipt, conflict, and external-state reconciliation through the
+reusable API. Discovery, exact commit inspection, durable canonical capture,
+and detached-worktree materialization are complete and recorded in
+`docs/tasks/phase-2-native-git-canonical-artifacts.md`.
 
 ## Known gaps
 
