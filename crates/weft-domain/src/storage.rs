@@ -2178,17 +2178,34 @@ impl SqliteRepository {
     }
 
     /// Persists a validation result against one immutable revision or candidate.
+    ///
+    /// The durable execution ID is the actor for a validation event: it identifies
+    /// the CI run, tool invocation, or external validator that made the claim.
     /// # Errors
     /// Returns an error for a missing target, duplicate ID, or storage failure.
     pub fn record_validation(&mut self, result: &ValidationResult) -> Result<(), StorageError> {
-        ensure_target_exists(&self.connection, result.target())?;
-        let inserted = self.connection.execute(
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_target_exists(&transaction, result.target())?;
+        let inserted = transaction.execute(
             "INSERT OR IGNORE INTO validation_results(validation_result_id, target_kind, target_id, kind, environment, status, execution_id, recorded_at_unix_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![result.id.as_str(), result.target.kind(), result.target.id(), result.kind, result.environment, result.status.as_str(), result.execution_id, result.recorded_at_unix_ms],
         )?;
         if inserted == 0 {
             return Err(StorageError::DuplicateValidationResult(result.id.clone()));
         }
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('validation-recorded', ?1, ?2, 'not-recorded', ?3, ?4, NULL, ?5)",
+            params![
+                format!("validation:{}", result.execution_id),
+                result.recorded_at_unix_ms,
+                result.status.as_str(),
+                format!("{},{}", result.id.as_str(), result.target.id()),
+                format!("kind:{};environment:{}", result.kind, result.environment),
+            ],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -3993,6 +4010,10 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
+        assert_eq!(
+            domain_event_kinds(&repository.connection),
+            vec!["validation-recorded", "validation-recorded"]
+        );
         assert_eq!(
             repository.validation_statuses_for(&target).unwrap(),
             vec![ValidationStatus::Failed, ValidationStatus::Passed]
