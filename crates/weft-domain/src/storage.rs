@@ -1701,6 +1701,7 @@ impl SqliteRepository {
     /// not belong to its declared upstream Change, the edge already exists, or it
     /// would create a dependency cycle.
     pub fn add_dependency(&mut self, dependency: &Dependency) -> Result<(), StorageError> {
+        let audit = AuditContext::local();
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -1759,6 +1760,20 @@ impl SqliteRepository {
                     dependency.upstream_change_id().as_str(),
                     dependency.upstream_revision_id().as_str()
                 ),
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('dependency-added', ?1, ?2, 'absent', 'pinned', ?3, NULL, ?4)",
+            params![
+                audit.actor,
+                audit.occurred_at_unix_ms,
+                format!(
+                    "{},{},{}",
+                    dependency.upstream_change_id().as_str(),
+                    dependency.downstream_change_id().as_str(),
+                    dependency.upstream_revision_id().as_str()
+                ),
+                format!("upstream-revision:{}", dependency.upstream_revision_id().as_str()),
             ],
         )?;
         transaction.commit()?;
