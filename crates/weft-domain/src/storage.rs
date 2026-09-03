@@ -1834,6 +1834,19 @@ impl SqliteRepository {
                 assignment.assignment_id().as_str()
             ],
         )?;
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('assignment-recorded', ?1, ?2, 'unassigned', ?3, ?4, NULL, NULL)",
+            params![
+                assignment.actor(),
+                assignment.assigned_at_unix_ms(),
+                format!("assigned:{}", assignment.role()),
+                format!(
+                    "{},{}",
+                    assignment.change_id().as_str(),
+                    assignment.assignment_id().as_str()
+                ),
+            ],
+        )?;
         transaction.commit()?;
         Ok(())
     }
@@ -2016,14 +2029,26 @@ impl SqliteRepository {
     /// # Errors
     /// Returns an error for a missing target, duplicate ID, or storage failure.
     pub fn create_review_request(&mut self, request: &ReviewRequest) -> Result<(), StorageError> {
-        ensure_target_exists(&self.connection, request.target())?;
-        let inserted = self.connection.execute(
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_target_exists(&transaction, request.target())?;
+        let inserted = transaction.execute(
             "INSERT OR IGNORE INTO review_requests(review_request_id, target_kind, target_id, requester, reviewers, created_at_unix_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![request.id.as_str(), request.target.kind(), request.target.id(), request.requester, request.reviewers, request.created_at_unix_ms],
         )?;
         if inserted == 0 {
             return Err(StorageError::DuplicateReviewRequest(request.id.clone()));
         }
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('review-requested', ?1, ?2, 'unreviewed', 'requested', ?3, NULL, NULL)",
+            params![
+                request.requester,
+                request.created_at_unix_ms,
+                format!("{},{}", request.id.as_str(), request.target.id()),
+            ],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -2065,7 +2090,19 @@ impl SqliteRepository {
     /// # Errors
     /// Returns an error for a missing request, duplicate ID, or storage failure.
     pub fn submit_review(&mut self, submission: &ReviewSubmission) -> Result<(), StorageError> {
-        let inserted = self.connection.execute(
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let target_id: Option<String> = transaction
+            .query_row(
+                "SELECT target_id FROM review_requests WHERE review_request_id = ?1",
+                [submission.request_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let target_id = target_id
+            .ok_or_else(|| StorageError::MissingReviewRequest(submission.request_id.clone()))?;
+        let inserted = transaction.execute(
             "INSERT OR IGNORE INTO review_submissions(review_submission_id, review_request_id, reviewer, outcome, comments, submitted_at_unix_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![submission.id.as_str(), submission.request_id.as_str(), submission.reviewer, submission.outcome.as_str(), submission.comments, submission.submitted_at_unix_ms],
         )?;
@@ -2074,6 +2111,21 @@ impl SqliteRepository {
                 submission.id.clone(),
             ));
         }
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('review-submitted', ?1, ?2, 'requested', ?3, ?4, NULL, NULL)",
+            params![
+                submission.reviewer,
+                submission.submitted_at_unix_ms,
+                submission.outcome.as_str(),
+                format!(
+                    "{},{},{}",
+                    submission.request_id.as_str(),
+                    submission.id.as_str(),
+                    target_id
+                ),
+            ],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -3161,6 +3213,17 @@ mod tests {
         );
     }
 
+    fn domain_event_kinds(connection: &Connection) -> Vec<String> {
+        let mut statement = connection
+            .prepare("SELECT kind FROM domain_events ORDER BY event_id")
+            .unwrap();
+        statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
     #[test]
     fn persists_and_reopens_verified_canonical_artifacts() {
         let root = temporary_directory();
@@ -3638,6 +3701,10 @@ mod tests {
                 vec![assignment]
             );
             assert_eq!(
+                domain_event_kinds(&repository.connection),
+                vec!["assignment-recorded"]
+            );
+            assert_eq!(
                 repository
                     .create_materialization(
                         materialization.clone(),
@@ -3730,6 +3797,10 @@ mod tests {
                     .unwrap(),
                 )
                 .unwrap();
+            assert_eq!(
+                domain_event_kinds(&repository.connection),
+                vec!["review-requested", "review-submitted"]
+            );
             repository
                 .record_validation(
                     &ValidationResult::new(
