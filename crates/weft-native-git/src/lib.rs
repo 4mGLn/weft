@@ -4,6 +4,7 @@
 //! canonical artifacts, and integration history remain in `weft-domain`.
 
 use std::fmt::{self, Display, Formatter};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -17,6 +18,32 @@ pub struct NativeGitRepository {
     root: PathBuf,
     git_dir: PathBuf,
     repository_id: RepositoryId,
+}
+
+/// An isolated worktree reconstructed from one canonical artifact.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativeGitMaterialization {
+    path: PathBuf,
+    base_commit: String,
+    tree_id: String,
+}
+
+impl NativeGitMaterialization {
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    #[must_use]
+    pub fn base_commit(&self) -> &str {
+        &self.base_commit
+    }
+
+    /// The exact Git tree created by staging the reconstructed content.
+    #[must_use]
+    pub fn tree_id(&self) -> &str {
+        &self.tree_id
+    }
 }
 
 impl NativeGitRepository {
@@ -182,6 +209,140 @@ impl NativeGitRepository {
             blob_digest,
         })
     }
+
+    /// Creates a detached worktree at an artifact's exact base and applies its
+    /// canonical delta to its index and working tree.
+    ///
+    /// The caller owns the destination and must later remove the worktree with
+    /// Git. A returned tree ID provides a provider-native receipt of the
+    /// reconstructed content; it is not used as canonical revision identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without creating a worktree when the artifact belongs
+    /// to another repository or its recorded base is no longer resolvable.
+    /// Errors after `git worktree add` leave the worktree for explicit caller
+    /// inspection and reconciliation.
+    pub fn materialize_artifact(
+        &self,
+        artifact: &CanonicalArtifact,
+        content_store: &ContentStore,
+        destination: impl AsRef<Path>,
+    ) -> Result<NativeGitMaterialization, NativeGitError> {
+        if artifact.base().repository_id() != &self.repository_id {
+            return Err(NativeGitError::RepositoryMismatch);
+        }
+        let base_commit = artifact
+            .base()
+            .object_id()
+            .strip_prefix("git:")
+            .ok_or(NativeGitError::InvalidBaseObject)?;
+        if self.resolve_commit(base_commit)? != base_commit {
+            return Err(NativeGitError::InvalidBaseObject);
+        }
+        let destination = destination.as_ref();
+        let destination_text = destination
+            .to_str()
+            .ok_or(NativeGitError::InvalidDestination)?;
+        if destination.exists() {
+            return Err(NativeGitError::DestinationExists(destination.to_path_buf()));
+        }
+        run_git_bytes(
+            &self.root,
+            ["worktree", "add", "--detach", destination_text, base_commit],
+        )?;
+
+        for operation in artifact.tree_delta().operations() {
+            if let PathOperation::Delete { path } = operation {
+                remove_path(destination, path)?;
+            }
+        }
+        for operation in artifact.tree_delta().operations() {
+            if let PathOperation::Upsert {
+                path,
+                mode,
+                blob_digest,
+            } = operation
+            {
+                write_path(
+                    destination,
+                    path,
+                    *mode,
+                    &content_store
+                        .read_blob(blob_digest)
+                        .map_err(NativeGitError::Storage)?,
+                )?;
+            }
+        }
+        run_git_bytes(destination, ["add", "--all"])?;
+        let tree_id = run_git(destination, ["write-tree"])?;
+        Ok(NativeGitMaterialization {
+            path: destination.to_path_buf(),
+            base_commit: base_commit.to_owned(),
+            tree_id,
+        })
+    }
+}
+
+fn remove_path(root: &Path, relative: &str) -> Result<(), NativeGitError> {
+    let path = root.join(relative);
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_dir() => {
+            fs::remove_dir(&path).map_err(NativeGitError::Io)
+        }
+        Ok(_) => fs::remove_file(&path).map_err(NativeGitError::Io),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(NativeGitError::Io(error)),
+    }
+}
+
+#[cfg(unix)]
+fn write_path(
+    root: &Path,
+    relative: &str,
+    mode: FileMode,
+    content: &[u8],
+) -> Result<(), NativeGitError> {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let path = root.join(relative);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(NativeGitError::Io)?;
+    }
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_dir() => {
+            fs::remove_dir_all(&path).map_err(NativeGitError::Io)?;
+        }
+        Ok(_) => fs::remove_file(&path).map_err(NativeGitError::Io)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(NativeGitError::Io(error)),
+    }
+    match mode {
+        FileMode::Regular | FileMode::Executable => {
+            fs::write(&path, content).map_err(NativeGitError::Io)?;
+            let permissions = if mode == FileMode::Executable {
+                0o755
+            } else {
+                0o644
+            };
+            fs::set_permissions(path, fs::Permissions::from_mode(permissions))
+                .map_err(NativeGitError::Io)
+        }
+        FileMode::SymbolicLink => {
+            let target = std::str::from_utf8(content).map_err(NativeGitError::PathEncoding)?;
+            symlink(target, path).map_err(NativeGitError::Io)
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn write_path(
+    _root: &Path,
+    _relative: &str,
+    _mode: FileMode,
+    _content: &[u8],
+) -> Result<(), NativeGitError> {
+    Err(NativeGitError::UnsupportedPlatform)
 }
 
 fn run_git<const N: usize>(cwd: &Path, args: [&str; N]) -> Result<String, NativeGitError> {
@@ -220,6 +381,11 @@ pub enum NativeGitError {
     MalformedOutput,
     UnsupportedChange(String),
     UnsupportedMode(String),
+    RepositoryMismatch,
+    InvalidBaseObject,
+    InvalidDestination,
+    DestinationExists(PathBuf),
+    UnsupportedPlatform,
 }
 impl Display for NativeGitError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -234,6 +400,15 @@ impl Display for NativeGitError {
             Self::MalformedOutput => f.write_str("Git emitted malformed output"),
             Self::UnsupportedChange(status) => write!(f, "unsupported Git change status: {status}"),
             Self::UnsupportedMode(mode) => write!(f, "unsupported Git tree mode: {mode}"),
+            Self::RepositoryMismatch => f.write_str("artifact belongs to a different repository"),
+            Self::InvalidBaseObject => f.write_str("artifact base is not an exact Git commit"),
+            Self::InvalidDestination => f.write_str("worktree destination is not valid UTF-8"),
+            Self::DestinationExists(path) => {
+                write!(f, "worktree destination already exists: {}", path.display())
+            }
+            Self::UnsupportedPlatform => {
+                f.write_str("native worktree materialization requires Unix file modes and symlinks")
+            }
         }
     }
 }
@@ -247,6 +422,34 @@ mod tests {
     use super::*;
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    fn expected_operations() -> Vec<PathOperation> {
+        vec![
+            PathOperation::Upsert {
+                path: "README".to_owned(),
+                mode: FileMode::Regular,
+                blob_digest: weft_domain::sha256_digest(b"updated\n"),
+            },
+            PathOperation::Upsert {
+                path: "binary.dat".to_owned(),
+                mode: FileMode::Regular,
+                blob_digest: weft_domain::sha256_digest(&[0, 255, 1, 2]),
+            },
+            PathOperation::Delete {
+                path: "delete.txt".to_owned(),
+            },
+            PathOperation::Upsert {
+                path: "link".to_owned(),
+                mode: FileMode::SymbolicLink,
+                blob_digest: weft_domain::sha256_digest(b"binary.dat"),
+            },
+            PathOperation::Upsert {
+                path: "script".to_owned(),
+                mode: FileMode::Executable,
+                blob_digest: weft_domain::sha256_digest(b"#!/bin/sh\necho weft\n"),
+            },
+        ]
+    }
 
     fn temporary_repository() -> PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -359,36 +562,10 @@ mod tests {
         let repository = NativeGitRepository::discover(&path).unwrap();
         let store = ContentStore::open(path.join("weft-content")).unwrap();
         let artifact = repository.capture_revision(&base, "HEAD", &store).unwrap();
+        let target_tree = run_git(&path, ["rev-parse", "HEAD^{tree}"]).unwrap();
         assert_eq!(artifact.base().repository_id(), repository.repository_id());
         assert_eq!(artifact.base().object_id(), format!("git:{base}"));
-        assert_eq!(
-            artifact.tree_delta().operations(),
-            &[
-                PathOperation::Upsert {
-                    path: "README".to_owned(),
-                    mode: FileMode::Regular,
-                    blob_digest: weft_domain::sha256_digest(b"updated\n"),
-                },
-                PathOperation::Upsert {
-                    path: "binary.dat".to_owned(),
-                    mode: FileMode::Regular,
-                    blob_digest: weft_domain::sha256_digest(&[0, 255, 1, 2]),
-                },
-                PathOperation::Delete {
-                    path: "delete.txt".to_owned(),
-                },
-                PathOperation::Upsert {
-                    path: "link".to_owned(),
-                    mode: FileMode::SymbolicLink,
-                    blob_digest: weft_domain::sha256_digest(b"binary.dat"),
-                },
-                PathOperation::Upsert {
-                    path: "script".to_owned(),
-                    mode: FileMode::Executable,
-                    blob_digest: weft_domain::sha256_digest(b"#!/bin/sh\necho weft\n"),
-                },
-            ]
-        );
+        assert_eq!(artifact.tree_delta().operations(), expected_operations());
         store.put_artifact(&artifact).unwrap();
         assert_eq!(store.read_artifact(artifact.digest()).unwrap(), artifact);
         assert_eq!(
@@ -397,6 +574,30 @@ mod tests {
                 .unwrap(),
             vec![0, 255, 1, 2]
         );
+        let materialized_path = path.with_file_name(format!(
+            "weft-native-git-materialized-{}",
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let materialization = repository
+            .materialize_artifact(&artifact, &store, &materialized_path)
+            .unwrap();
+        assert_eq!(materialization.base_commit(), base);
+        assert_eq!(materialization.tree_id(), target_tree);
+        assert_eq!(
+            run_git(materialization.path(), ["rev-parse", "HEAD"]).unwrap(),
+            base
+        );
+        assert_eq!(
+            run_git(materialization.path(), ["status", "--porcelain"]).unwrap(),
+            "M  README\nA  binary.dat\nD  delete.txt\nA  link\nA  script"
+        );
+        let status = Command::new("git")
+            .args(["worktree", "remove", "--force"])
+            .arg(&materialized_path)
+            .current_dir(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
         fs::remove_dir_all(path).unwrap();
     }
 }
