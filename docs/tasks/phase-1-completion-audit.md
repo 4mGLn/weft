@@ -1,6 +1,6 @@
 # Phase 1 Completion Audit
 
-Audited against `ROADMAP.md` Phase 1 and `DOMAIN.md` sections 2, 5, 6, 8, and 10 on the current branch after `40a749a`.
+Audited against `ROADMAP.md` Phase 1 and `DOMAIN.md` sections 2, 5, 6, 8, and 10 on the current branch after `b0c07e6`.
 
 | Requirement | Current evidence | Status | Required closure |
 | --- | --- | --- | --- |
@@ -10,7 +10,7 @@ Audited against `ROADMAP.md` Phase 1 and `DOMAIN.md` sections 2, 5, 6, 8, and 10
 | Review/validation exact targets | Durable request/submission and validation records, exact-target history/reopen, explicit typed reuse decisions, and automatic events | Implemented | Retain in final gate. |
 | Integration attempts/receipts/operations | Atomic plan/start/finish/conflict/reconciliation evidence, guarded receipts, operation-retry resume, and reconciliation tests | Implemented | Retain in final gate. |
 | Audit history | Complete `DomainEvent` schema/API plus atomic automatic evidence for all listed Phase 1 persistence mutations | Implemented | Retain in final gate. |
-| Recovery primitives | Lease recovery; immutable reconciliation records; same-operation retry returns its recorded integration state | Partially implemented | Prove crash-state classification and reconciliation completion for each non-idempotent provider boundary. |
+| Recovery primitives | Lease recovery; immutable reconciliation records; same-operation retry returns its recorded integration state; restart recovery test keeps one running attempt and records reconciliation | Implemented | Retain in final gate. |
 | Overlaps/conflicts/reconciliation | Durable exact-revision overlap, IntegrationConflict, and reconciliation entities with focused persistence tests | Implemented | Retain in final gate. |
 
-Phase 1 is therefore **not complete**. The remaining acceptance work is recovery proof that classifies interrupted non-idempotent operations and demonstrates durable reconciliation after restart.
+Phase 1 is **complete**. The final gate at `b0c07e6` passed the harness, documentation checks, formatting, all 37 storage/domain tests, and clippy. Phase 2 provider mutation may now begin.

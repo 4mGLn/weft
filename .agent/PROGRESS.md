@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 1 — Persistence and domain kernel.
+Phase 2 — Native Git provider.
 
 ## Completed
 
@@ -45,17 +45,20 @@ Phase 1 — Persistence and domain kernel.
 - Made integration start, conflict capture, and terminal receipt persistence
   transactionally guarded; integration start automatically emits complete domain
   evidence in the same transaction and is proven across independent connections.
+- Completed Phase 1 acceptance evidence: every persisted mutation emits durable
+  domain evidence, retrying an operation ID resumes its exact attempt, and a
+  running integration survives restart for explicit reconciliation without
+  duplicate effects.
 
 ## Next checkpoint
 
-Close the remaining complete-audit, explicit-reuse, and interrupted-operation
-recovery semantics before the Phase 1 acceptance review.
+Implement Native Git repository discovery, exact inspection, canonical capture
+and reconstruction, materialization, composition, guarded integration, receipt,
+conflict, and external-state reconciliation through the reusable API.
 
 ## Known gaps
 
 - No provider runtime implementation or stable CLI.
-- Phase 1's complete automatic audit contract is not yet implemented for all
-  correctness-sensitive transitions; Phase 2 provider mutation remains gated on it.
 - GitButler provider removal/reconnect and crash-uncertain landing remain unproven
   implementation gates.
 - No runtime packaging or deployment support.
