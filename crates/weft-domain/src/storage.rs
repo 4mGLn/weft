@@ -2805,18 +2805,19 @@ impl SqliteRepository {
     pub fn record_integration_conflict(
         &mut self,
         conflict: &IntegrationConflict,
+        audit: &AuditContext,
     ) -> Result<(), StorageError> {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let row: Option<(String, String)> = transaction
+        let row: Option<(String, String, String)> = transaction
             .query_row(
-                "SELECT candidate_id, state FROM integration_attempts WHERE integration_id = ?1",
+                "SELECT candidate_id, state, operation_id FROM integration_attempts WHERE integration_id = ?1",
                 [conflict.integration_id.as_str()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        let (candidate, state) =
+        let (candidate, state, operation_id) =
             row.ok_or_else(|| StorageError::MissingIntegration(conflict.integration_id.clone()))?;
         if candidate != conflict.candidate_id.as_str() {
             return Err(StorageError::ConflictCandidateMismatch);
@@ -2831,6 +2832,16 @@ impl SqliteRepository {
                 "integration changed during immediate transaction",
             ));
         }
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('integration-conflicted', ?1, ?2, 'running', 'conflicted', ?3, ?4, ?5)",
+            params![
+                audit.actor,
+                audit.occurred_at_unix_ms,
+                format!("{},{},{}", conflict.integration_id.as_str(), conflict.candidate_id.as_str(), conflict.id.as_str()),
+                operation_id,
+                conflict.provider_state,
+            ],
+        )?;
         transaction.commit()?;
         Ok(())
     }
@@ -2841,25 +2852,39 @@ impl SqliteRepository {
     pub fn record_reconciliation(
         &mut self,
         record: &ReconciliationRecord,
+        audit: &AuditContext,
     ) -> Result<(), StorageError> {
-        let exists = self
+        let transaction = self
             .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let operation_id: Option<String> = transaction
             .query_row(
-                "SELECT 1 FROM integration_attempts WHERE integration_id = ?1",
+                "SELECT operation_id FROM integration_attempts WHERE integration_id = ?1",
                 [record.integration_id.as_str()],
-                |_| Ok(()),
+                |row| row.get(0),
             )
-            .optional()?
-            .is_some();
-        if !exists {
+            .optional()?;
+        let Some(operation_id) = operation_id else {
             return Err(StorageError::MissingIntegration(
                 record.integration_id.clone(),
             ));
-        }
-        self.connection.execute(
+        };
+        transaction.execute(
             "INSERT INTO reconciliation_records(reconciliation_id, integration_id, observed_state, evidence, resolved) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![record.id.as_str(), record.integration_id.as_str(), record.observed_state, record.evidence, record.resolved],
         )?;
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('integration-reconciled', ?1, ?2, 'uncertain', ?3, ?4, ?5, ?6)",
+            params![
+                audit.actor,
+                audit.occurred_at_unix_ms,
+                if record.resolved { "resolved" } else { "unresolved" },
+                format!("{},{}", record.integration_id.as_str(), record.id.as_str()),
+                operation_id,
+                record.evidence,
+            ],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -4772,9 +4797,14 @@ mod tests {
                 Some("tests pending".to_owned()),
             )
             .unwrap();
-            repository.record_integration_conflict(&conflict).unwrap();
+            repository
+                .record_integration_conflict(&conflict, &AuditContext::new("agent-1", 101).unwrap())
+                .unwrap();
             assert!(matches!(
-                repository.record_integration_conflict(&conflict),
+                repository.record_integration_conflict(
+                    &conflict,
+                    &AuditContext::new("agent-1", 102).unwrap(),
+                ),
                 Err(StorageError::InvalidIntegrationTransition)
             ));
         }
@@ -4853,6 +4883,7 @@ mod tests {
                         false,
                     )
                     .unwrap(),
+                    &AuditContext::new("agent-1", 100).unwrap(),
                 )
                 .unwrap();
         }
