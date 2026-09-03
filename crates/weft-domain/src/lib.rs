@@ -12,9 +12,9 @@ pub use change::{
     RevisionId, StackId, ValidationResultId, WorkspaceId,
 };
 pub use storage::{
-    Assignment, AuditEvent, CandidateInput, CompositionCandidate, ContentStore, Dependency,
-    DomainEvent, IntegrationAttempt, IntegrationConflict, IntegrationReceipt, IntegrationState,
-    Lease, Materialization, MaterializationState, ReconciliationRecord, ReviewOutcome,
-    ReviewRequest, ReviewSubmission, SqliteRepository, StackVersion, StorageError, StoredChange,
-    Target, ValidationResult, ValidationStatus,
+    Assignment, AuditEvent, CandidateInput, ChangeRelationKind, CompositionCandidate, ContentStore,
+    Dependency, DomainEvent, IntegrationAttempt, IntegrationConflict, IntegrationReceipt,
+    IntegrationState, Lease, Materialization, MaterializationState, ReconciliationRecord,
+    ReviewOutcome, ReviewRequest, ReviewSubmission, SqliteRepository, StackVersion, StorageError,
+    StoredChange, Target, ValidationResult, ValidationStatus,
 };

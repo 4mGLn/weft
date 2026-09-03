@@ -17,7 +17,7 @@ use crate::{
     WorkspaceId,
 };
 
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 static NEXT_TEMPORARY_OBJECT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
@@ -234,6 +234,20 @@ pub struct ReconciliationRecord {
     observed_state: String,
     evidence: String,
     resolved: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChangeRelationKind {
+    TaskDecomposition,
+    RelatedTo,
+}
+impl ChangeRelationKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::TaskDecomposition => "task-decomposition",
+            Self::RelatedTo => "related-to",
+        }
+    }
 }
 
 impl ReconciliationRecord {
@@ -1000,6 +1014,13 @@ impl SqliteRepository {
                  reconciliation_id TEXT PRIMARY KEY NOT NULL,
                  integration_id TEXT NOT NULL REFERENCES integration_attempts(integration_id) ON DELETE RESTRICT,
                  observed_state TEXT NOT NULL, evidence TEXT NOT NULL, resolved INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS change_relations (
+                 source_change_id TEXT NOT NULL REFERENCES changes(change_id) ON DELETE RESTRICT,
+                 target_change_id TEXT NOT NULL REFERENCES changes(change_id) ON DELETE RESTRICT,
+                 kind TEXT NOT NULL CHECK(kind IN ('task-decomposition', 'related-to')),
+                 PRIMARY KEY(source_change_id, target_change_id, kind),
+                 CHECK(source_change_id <> target_change_id)
              );
              CREATE TABLE IF NOT EXISTS dependencies (
                  upstream_change_id TEXT NOT NULL REFERENCES changes(change_id) ON DELETE RESTRICT,
@@ -2123,6 +2144,33 @@ impl SqliteRepository {
         )?;
         Ok(())
     }
+
+    /// Adds a non-dependency relationship between two existing Changes.
+    /// # Errors
+    /// Returns an error for missing endpoints, self-links, or duplicate relations.
+    pub fn add_change_relation(
+        &mut self,
+        source: &ChangeId,
+        target: &ChangeId,
+        kind: ChangeRelationKind,
+    ) -> Result<(), StorageError> {
+        if source == target {
+            return Err(StorageError::Invariant(
+                "change relation cannot be self-referential",
+            ));
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_change_exists(&transaction, source)?;
+        ensure_change_exists(&transaction, target)?;
+        let inserted = transaction.execute("INSERT OR IGNORE INTO change_relations(source_change_id, target_change_id, kind) VALUES (?1, ?2, ?3)", params![source.as_str(), target.as_str(), kind.as_str()])?;
+        if inserted == 0 {
+            return Err(StorageError::DuplicateChangeRelation);
+        }
+        transaction.commit()?;
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -2168,6 +2216,7 @@ pub enum StorageError {
     EmptyStack,
     DuplicateStackEntry,
     ConflictCandidateMismatch,
+    DuplicateChangeRelation,
     StaleStackVersion {
         expected: i64,
         actual: i64,
@@ -2291,6 +2340,7 @@ impl Display for StorageError {
             Self::ConflictCandidateMismatch => {
                 formatter.write_str("conflict candidate does not match integration")
             }
+            Self::DuplicateChangeRelation => formatter.write_str("duplicate change relation"),
             Self::StaleStackVersion { expected, actual } => write!(
                 formatter,
                 "stale stack version: expected {expected}, actual {actual}"
@@ -3454,6 +3504,44 @@ mod tests {
                 )
                 .unwrap(),
             "provider response uncertain"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn persists_non_dependency_change_relations() {
+        let root = temporary_directory();
+        let database = root.join("weft.sqlite");
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let first = ChangeId::new("first").unwrap();
+        let second = ChangeId::new("second").unwrap();
+        {
+            let mut repository = SqliteRepository::open(&database, store.clone()).unwrap();
+            repository.create_change(first.clone()).unwrap();
+            repository.create_change(second.clone()).unwrap();
+            repository
+                .add_change_relation(&first, &second, ChangeRelationKind::TaskDecomposition)
+                .unwrap();
+            repository
+                .add_change_relation(&first, &second, ChangeRelationKind::RelatedTo)
+                .unwrap();
+            assert!(matches!(
+                repository.add_change_relation(&first, &second, ChangeRelationKind::RelatedTo),
+                Err(StorageError::DuplicateChangeRelation)
+            ));
+            assert!(matches!(
+                repository.add_change_relation(&first, &first, ChangeRelationKind::RelatedTo),
+                Err(StorageError::Invariant(_))
+            ));
+        }
+        let repository = SqliteRepository::open(&database, store).unwrap();
+        assert_eq!(
+            repository
+                .connection
+                .query_row("SELECT COUNT(*) FROM change_relations", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            2
         );
         fs::remove_dir_all(root).unwrap();
     }
