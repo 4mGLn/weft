@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 6 — Paseo integration.
+Phase 7 — Multi-agent workflows.
 
 ## Completed
 
@@ -73,11 +73,15 @@ Phase 6 — Paseo integration.
 - Completed Phase 5 agent protocol acceptance: provider-neutral operations and
   explicit recovery errors are published, and a fresh CLI runtime resumes an
   exact canonical revision from durable state after the originating process ends.
+- Completed Phase 6 Paseo integration acceptance: the reusable bridge maps
+  Paseo actions to ordinary durable Weft leases, handoffs, and history without
+  making the Paseo daemon a state or scheduling dependency.
 
 ## Next checkpoint
 
-Define the Phase 6 Paseo integration boundary while keeping the Weft API and
-CLI independently operable.
+Publish dependency-aware multi-agent workflow requests, reviewer/resolver
+assignment, validation pipelines, composition planning, and integration ordering
+without implementing agent process scheduling.
 
 ## Known gaps
 

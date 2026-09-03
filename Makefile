@@ -1,4 +1,4 @@
-.PHONY: check docs-check harness-check rust-check phase0-spike phase0-native-git-spike phase0-gitbutler-spike phase5-resume
+.PHONY: check docs-check harness-check rust-check phase0-spike phase0-native-git-spike phase0-gitbutler-spike phase5-resume phase6-paseo-bridge
 
 RUST_HOST := $(shell rustc -vV | sed -n 's/^host: //p')
 
@@ -25,3 +25,6 @@ phase0-spike: phase0-native-git-spike phase0-gitbutler-spike
 
 phase5-resume:
 	./scripts/test-cli-session-resume.sh
+
+phase6-paseo-bridge:
+	./scripts/test-paseo-weft-bridge.sh
