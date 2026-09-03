@@ -1343,6 +1343,47 @@ impl SqliteRepository {
         })
     }
 
+    /// Renews an active lease only for its current holder.
+    /// # Errors
+    /// Returns an error for an expired/missing lease, mismatched holder, or invalid expiry.
+    pub fn renew_lease(
+        &mut self,
+        lease: &Lease,
+        now_unix_ms: i64,
+        expires_at_unix_ms: i64,
+    ) -> Result<Lease, StorageError> {
+        if expires_at_unix_ms <= now_unix_ms {
+            return Err(StorageError::InvalidLeaseExpiry);
+        }
+        let updated = self.connection.execute(
+            "UPDATE leases SET expires_at_unix_ms = ?1 WHERE change_id = ?2 AND operation = ?3 AND holder = ?4 AND expires_at_unix_ms > ?5",
+            params![expires_at_unix_ms, lease.change_id.as_str(), lease.operation, lease.holder, now_unix_ms],
+        )?;
+        if updated != 1 {
+            return Err(StorageError::LeaseLost);
+        }
+        Ok(Lease {
+            change_id: lease.change_id.clone(),
+            operation: lease.operation.clone(),
+            holder: lease.holder.clone(),
+            expires_at_unix_ms,
+        })
+    }
+
+    /// Releases an active lease only for its current holder.
+    /// # Errors
+    /// Returns an error when the lease was lost or already released.
+    pub fn release_lease(&mut self, lease: &Lease) -> Result<(), StorageError> {
+        let deleted = self.connection.execute(
+            "DELETE FROM leases WHERE change_id = ?1 AND operation = ?2 AND holder = ?3",
+            params![lease.change_id.as_str(), lease.operation, lease.holder],
+        )?;
+        if deleted != 1 {
+            return Err(StorageError::LeaseLost);
+        }
+        Ok(())
+    }
+
     /// Returns durable events in creation order for a Change.
     ///
     /// # Errors
@@ -2269,6 +2310,7 @@ pub enum StorageError {
         holder: String,
         expires_at_unix_ms: i64,
     },
+    LeaseLost,
     StaleHead {
         expected: Option<RevisionId>,
         actual: Option<RevisionId>,
@@ -2424,6 +2466,7 @@ impl Display for StorageError {
                 formatter,
                 "lease held by {holder} until {expires_at_unix_ms}"
             ),
+            Self::LeaseLost => formatter.write_str("lease is no longer held by this actor"),
             Self::StaleHead { expected, actual } => write!(
                 formatter,
                 "stale revision head: expected {:?}, actual {:?}",
@@ -2867,6 +2910,37 @@ mod tests {
                 "lease-acquired",
                 "lease-acquired"
             ]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn renews_and_releases_only_active_holder_leases() {
+        let root = temporary_directory();
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let mut repository = SqliteRepository::open(root.join("weft.sqlite"), store).unwrap();
+        let change = ChangeId::new("change-1").unwrap();
+        repository.create_change(change.clone()).unwrap();
+        let lease = repository
+            .acquire_lease(&change, "integrate", "agent-a", 100, 200)
+            .unwrap();
+        let renewed = repository.renew_lease(&lease, 150, 300).unwrap();
+        assert_eq!(renewed.expires_at_unix_ms(), 300);
+        assert!(matches!(
+            repository.renew_lease(&renewed, 300, 400),
+            Err(StorageError::LeaseLost)
+        ));
+        repository.release_lease(&renewed).unwrap();
+        assert!(matches!(
+            repository.release_lease(&renewed),
+            Err(StorageError::LeaseLost)
+        ));
+        assert_eq!(
+            repository
+                .acquire_lease(&change, "integrate", "agent-b", 151, 250)
+                .unwrap()
+                .holder(),
+            "agent-b"
         );
         fs::remove_dir_all(root).unwrap();
     }
