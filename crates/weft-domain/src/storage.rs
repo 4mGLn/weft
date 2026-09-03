@@ -536,6 +536,16 @@ impl ReviewOutcome {
             Self::Blocked => "blocked",
         }
     }
+
+    fn parse(value: &str) -> Result<Self, StorageError> {
+        match value {
+            "approved" => Ok(Self::Approved),
+            "changes-requested" => Ok(Self::ChangesRequested),
+            "rejected" => Ok(Self::Rejected),
+            "blocked" => Ok(Self::Blocked),
+            _ => Err(StorageError::Invariant("unknown review outcome")),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -572,6 +582,18 @@ impl ReviewRequest {
     pub fn target(&self) -> &Target {
         &self.target
     }
+    #[must_use]
+    pub fn requester(&self) -> &str {
+        &self.requester
+    }
+    #[must_use]
+    pub fn reviewers(&self) -> &str {
+        &self.reviewers
+    }
+    #[must_use]
+    pub const fn created_at_unix_ms(&self) -> i64 {
+        self.created_at_unix_ms
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -606,6 +628,26 @@ impl ReviewSubmission {
     #[must_use]
     pub fn outcome(&self) -> ReviewOutcome {
         self.outcome
+    }
+    #[must_use]
+    pub fn id(&self) -> &ReviewSubmissionId {
+        &self.id
+    }
+    #[must_use]
+    pub fn request_id(&self) -> &ReviewRequestId {
+        &self.request_id
+    }
+    #[must_use]
+    pub fn reviewer(&self) -> &str {
+        &self.reviewer
+    }
+    #[must_use]
+    pub fn comments(&self) -> &str {
+        &self.comments
+    }
+    #[must_use]
+    pub const fn submitted_at_unix_ms(&self) -> i64 {
+        self.submitted_at_unix_ms
     }
 }
 
@@ -1973,6 +2015,40 @@ impl SqliteRepository {
         Ok(())
     }
 
+    /// Returns requests for one exact immutable target, oldest first.
+    ///
+    /// Results are never inferred from a different revision or candidate.
+    ///
+    /// # Errors
+    /// Returns an error for a missing target or malformed persisted review data.
+    pub fn review_requests_for(&self, target: &Target) -> Result<Vec<ReviewRequest>, StorageError> {
+        ensure_target_exists(&self.connection, target)?;
+        let mut statement = self.connection.prepare(
+            "SELECT review_request_id, requester, reviewers, created_at_unix_ms
+             FROM review_requests WHERE target_kind = ?1 AND target_id = ?2
+             ORDER BY created_at_unix_ms, review_request_id",
+        )?;
+        let rows = statement.query_map(params![target.kind(), target.id()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (id, requester, reviewers, created_at_unix_ms) = row?;
+            ReviewRequest::new(
+                ReviewRequestId::new(id)?,
+                target.clone(),
+                requester,
+                reviewers,
+                created_at_unix_ms,
+            )
+        })
+        .collect()
+    }
+
     /// Persists an immutable outcome against an existing exact-target request.
     /// # Errors
     /// Returns an error for a missing request, duplicate ID, or storage failure.
@@ -1987,6 +2063,54 @@ impl SqliteRepository {
             ));
         }
         Ok(())
+    }
+
+    /// Returns immutable submissions for one review request, oldest first.
+    ///
+    /// # Errors
+    /// Returns an error for a missing request or malformed persisted review data.
+    pub fn review_submissions_for(
+        &self,
+        request_id: &ReviewRequestId,
+    ) -> Result<Vec<ReviewSubmission>, StorageError> {
+        let request_exists = self
+            .connection
+            .query_row(
+                "SELECT 1 FROM review_requests WHERE review_request_id = ?1",
+                [request_id.as_str()],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !request_exists {
+            return Err(StorageError::MissingReviewRequest(request_id.clone()));
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT review_submission_id, reviewer, outcome, comments, submitted_at_unix_ms
+             FROM review_submissions WHERE review_request_id = ?1
+             ORDER BY submitted_at_unix_ms, review_submission_id",
+        )?;
+        let rows = statement.query_map([request_id.as_str()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (id, reviewer, outcome, comments, submitted_at_unix_ms) = row?;
+            ReviewSubmission::new(
+                ReviewSubmissionId::new(id)?,
+                request_id.clone(),
+                reviewer,
+                ReviewOutcome::parse(&outcome)?,
+                comments,
+                submitted_at_unix_ms,
+            )
+        })
+        .collect()
     }
 
     /// Persists a validation result against one immutable revision or candidate.
@@ -2382,6 +2506,7 @@ pub enum StorageError {
     MissingRevision(RevisionId),
     MissingCandidate(CandidateId),
     MissingMaterialization(MaterializationId),
+    MissingReviewRequest(ReviewRequestId),
     MissingIntegration(IntegrationId),
     StaleCandidate(CandidateId),
     StaleTarget {
@@ -2491,6 +2616,9 @@ impl Display for StorageError {
             Self::MissingCandidate(id) => write!(formatter, "missing candidate: {}", id.as_str()),
             Self::MissingMaterialization(id) => {
                 write!(formatter, "missing materialization: {}", id.as_str())
+            }
+            Self::MissingReviewRequest(id) => {
+                write!(formatter, "missing review request: {}", id.as_str())
             }
             Self::MissingIntegration(id) => {
                 write!(formatter, "missing integration: {}", id.as_str())
@@ -3484,6 +3612,7 @@ mod tests {
         let artifact = artifact(&store);
         let change = ChangeId::new("change-1").unwrap();
         let revision = RevisionId::new("revision-1").unwrap();
+        let review_request_id = ReviewRequestId::new("review-1").unwrap();
         {
             let mut repository = SqliteRepository::open(&database, store.clone()).unwrap();
             repository.create_change(change.clone()).unwrap();
@@ -3491,7 +3620,7 @@ mod tests {
                 .append_revision(&change, None, revision.clone(), &artifact)
                 .unwrap();
             let request = ReviewRequest::new(
-                ReviewRequestId::new("review-1").unwrap(),
+                review_request_id.clone(),
                 Target::Revision(revision.clone()),
                 "author",
                 "reviewer",
@@ -3565,6 +3694,68 @@ mod tests {
                 .unwrap(),
             1
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn loads_review_history_for_an_exact_target_after_reopen() {
+        let root = temporary_directory();
+        let database = root.join("weft.sqlite");
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let artifact = artifact(&store);
+        let change = ChangeId::new("change-1").unwrap();
+        let revision = RevisionId::new("revision-1").unwrap();
+        let target = Target::Revision(revision.clone());
+        let request_id = ReviewRequestId::new("review-1").unwrap();
+        {
+            let mut repository = SqliteRepository::open(&database, store.clone()).unwrap();
+            repository.create_change(change.clone()).unwrap();
+            repository
+                .append_revision(&change, None, revision, &artifact)
+                .unwrap();
+            repository
+                .create_review_request(
+                    &ReviewRequest::new(
+                        request_id.clone(),
+                        target.clone(),
+                        "author",
+                        "reviewer",
+                        100,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            repository
+                .submit_review(
+                    &ReviewSubmission::new(
+                        ReviewSubmissionId::new("submission-1").unwrap(),
+                        request_id.clone(),
+                        "reviewer",
+                        ReviewOutcome::Approved,
+                        "looks good",
+                        101,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+        }
+        let repository = SqliteRepository::open(&database, store).unwrap();
+        let requests = repository.review_requests_for(&target).unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].id(), &request_id);
+        assert_eq!(requests[0].requester(), "author");
+        assert_eq!(requests[0].reviewers(), "reviewer");
+        assert_eq!(requests[0].created_at_unix_ms(), 100);
+        let submissions = repository.review_submissions_for(&request_id).unwrap();
+        assert_eq!(submissions.len(), 1);
+        assert_eq!(submissions[0].outcome(), ReviewOutcome::Approved);
+        assert_eq!(submissions[0].reviewer(), "reviewer");
+        assert_eq!(submissions[0].comments(), "looks good");
+        assert_eq!(submissions[0].submitted_at_unix_ms(), 101);
+        assert!(matches!(
+            repository.review_submissions_for(&ReviewRequestId::new("missing").unwrap()),
+            Err(StorageError::MissingReviewRequest(_))
+        ));
         fs::remove_dir_all(root).unwrap();
     }
 
