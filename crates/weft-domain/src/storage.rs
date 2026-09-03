@@ -4998,6 +4998,85 @@ mod tests {
     }
 
     #[test]
+    fn resumes_running_operation_and_records_reconciliation_after_restart() {
+        let root = temporary_directory();
+        let database = root.join("weft.sqlite");
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let artifact = artifact(&store);
+        let change = ChangeId::new("change-1").unwrap();
+        let revision = RevisionId::new("revision-1").unwrap();
+        let candidate = CandidateId::new("candidate-1").unwrap();
+        let integration = IntegrationId::new("integration-1").unwrap();
+        let attempt = IntegrationAttempt::new(
+            integration.clone(),
+            RepositoryId::new("repo-1").unwrap(),
+            candidate.clone(),
+            "main",
+            "target-r1",
+            "native-git",
+            "merge",
+            OperationId::new("operation-1").unwrap(),
+            "agent-1",
+        )
+        .unwrap();
+        {
+            let mut repository = SqliteRepository::open(&database, store.clone()).unwrap();
+            repository.create_change(change.clone()).unwrap();
+            repository
+                .append_revision(&change, None, revision.clone(), &artifact)
+                .unwrap();
+            repository
+                .create_candidate(
+                    candidate,
+                    artifact.base().clone(),
+                    vec![CandidateInput::new(change.clone(), revision)],
+                )
+                .unwrap();
+            repository
+                .plan_integration(&attempt, &AuditContext::new("agent-1", 100).unwrap())
+                .unwrap();
+            repository
+                .acquire_lease(&change, "integrate", "agent-1", 100, 200)
+                .unwrap();
+            repository
+                .start_integration(&integration, "target-r1", 100)
+                .unwrap();
+        }
+        let mut repository = SqliteRepository::open(&database, store).unwrap();
+        assert_eq!(
+            repository
+                .plan_integration(&attempt, &AuditContext::new("agent-1", 101).unwrap())
+                .unwrap()
+                .state(),
+            IntegrationState::Running
+        );
+        repository
+            .record_reconciliation(
+                &ReconciliationRecord::new(
+                    ReconciliationId::new("reconciliation-1").unwrap(),
+                    integration,
+                    "provider response uncertain",
+                    "process restarted while provider response was pending",
+                    false,
+                )
+                .unwrap(),
+                &AuditContext::new("agent-1", 102).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            repository
+                .connection
+                .query_row("SELECT COUNT(*) FROM integration_attempts", [], |row| row
+                    .get::<_, i64>(
+                    0
+                ))
+                .unwrap(),
+            1
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn persists_non_dependency_change_relations() {
         let root = temporary_directory();
         let database = root.join("weft.sqlite");
