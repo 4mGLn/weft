@@ -2722,6 +2722,52 @@ impl SqliteRepository {
         IntegrationState::parse(&state)
     }
 
+    /// Loads one durable integration attempt without reconstructing mutable inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a missing attempt or malformed persisted identity.
+    pub fn load_integration_attempt(
+        &self,
+        integration_id: &IntegrationId,
+    ) -> Result<IntegrationAttempt, StorageError> {
+        let row: Option<IntegrationAttemptRow> = self.connection.query_row(
+            "SELECT integration_id, repository_id, candidate_id, target_ref, expected_target_revision, provider, strategy, actor, state FROM integration_attempts WHERE integration_id = ?1",
+            [integration_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?)),
+        ).optional()?;
+        let (
+            id,
+            repository_id,
+            candidate_id,
+            target_ref,
+            expected_target_revision,
+            provider,
+            strategy,
+            actor,
+            state,
+        ) = row.ok_or_else(|| StorageError::MissingIntegration(integration_id.clone()))?;
+        Ok(IntegrationAttempt {
+            id: IntegrationId::new(id)?,
+            repository_id: RepositoryId::new(repository_id)?,
+            candidate_id: CandidateId::new(candidate_id)?,
+            target_ref,
+            expected_target_revision,
+            provider,
+            strategy,
+            operation_id: self
+                .connection
+                .query_row(
+                    "SELECT operation_id FROM integration_attempts WHERE integration_id = ?1",
+                    [integration_id.as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .map(OperationId::new)??,
+            actor,
+            state: IntegrationState::parse(&state)?,
+        })
+    }
+
     /// Records a terminal provider outcome; only verified success can create a receipt.
     /// # Errors
     /// Returns an error for invalid transitions or success without a receipt.

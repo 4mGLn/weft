@@ -4,11 +4,12 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use weft_domain::{
-    Assignment, AssignmentId, AuditContext, CandidateId, CandidateInput, ChangeId, ContentStore,
-    Dependency, IntegrationAttempt, IntegrationId, MaterializationId, MaterializationState,
-    OperationId, RepositoryId, ReviewOutcome, ReviewRequest, ReviewRequestId, ReviewSubmission,
-    ReviewSubmissionId, RevisionId, SqliteRepository, StackId, Target, ValidationResult,
-    ValidationResultId, ValidationStatus, WorkspaceId,
+    Assignment, AssignmentId, AuditContext, CandidateId, CandidateInput, ChangeId, ConflictId,
+    ContentStore, Dependency, IntegrationAttempt, IntegrationId, IntegrationReceiptId,
+    MaterializationId, MaterializationState, OperationId, ReconciliationId, RepositoryId,
+    ReviewOutcome, ReviewRequest, ReviewRequestId, ReviewSubmission, ReviewSubmissionId,
+    RevisionId, SqliteRepository, StackId, Target, ValidationResult, ValidationResultId,
+    ValidationStatus, WorkspaceId,
 };
 use weft_native_git::NativeGitRepository;
 
@@ -137,6 +138,11 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
         arguments.drain(0..2);
         return plan_integration(&mut repository, &id, &mut arguments);
     }
+    if arguments.len() >= 3 && arguments[0] == "integrate" && arguments[1] == "run" {
+        let id = arguments.remove(2);
+        arguments.drain(0..2);
+        return run_integration(&mut repository, &id, &mut arguments);
+    }
     if arguments.len() == 2 && arguments[0] == "history" {
         return history(&repository, &arguments[1]);
     }
@@ -235,6 +241,58 @@ fn plan_integration(
         escape(attempt.id().as_str()),
         escape(attempt.candidate_id().as_str()),
         escape(attempt.operation_id().as_str())
+    ))
+}
+
+fn run_integration(
+    repository: &mut SqliteRepository,
+    id: &str,
+    arguments: &mut Vec<String>,
+) -> Result<String, CliError> {
+    let path = required_option(arguments, "--repository")?;
+    let destination = required_option(arguments, "--destination")?;
+    let receipt = required_option(arguments, "--receipt-id")?;
+    let conflict = required_option(arguments, "--conflict-id")?;
+    let reconciliation = required_option(arguments, "--reconciliation-id")?;
+    let now = required_i64(arguments, "--now")?;
+    if !take_flag(arguments, "--yes") || !arguments.is_empty() {
+        return Err(CliError::usage(
+            "integrate run requires --yes and no unexpected arguments",
+        ));
+    }
+    let attempt = repository
+        .load_integration_attempt(
+            &IntegrationId::new(id).map_err(|error| CliError::usage(error.to_string()))?,
+        )
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    if attempt.provider() != "native-git" {
+        return Err(CliError::usage(
+            "integrate run currently supports provider native-git only",
+        ));
+    }
+    let provider =
+        NativeGitRepository::discover(path).map_err(|error| CliError::domain(error.to_string()))?;
+    let audit = AuditContext::new(attempt.actor(), now)
+        .map_err(|error| CliError::usage(error.to_string()))?;
+    let receipt = provider
+        .execute_integration(
+            repository,
+            &attempt,
+            IntegrationReceiptId::new(receipt)
+                .map_err(|error| CliError::usage(error.to_string()))?,
+            ConflictId::new(conflict).map_err(|error| CliError::usage(error.to_string()))?,
+            ReconciliationId::new(reconciliation)
+                .map_err(|error| CliError::usage(error.to_string()))?,
+            &audit,
+            now,
+            destination,
+        )
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    Ok(format!(
+        "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"integrationReceipt\",\"integrationId\":\"{}\",\"priorTarget\":\"{}\",\"resultCommit\":\"{}\"}}",
+        escape(id),
+        escape(receipt.prior_target()),
+        escape(receipt.result_commit())
     ))
 }
 
