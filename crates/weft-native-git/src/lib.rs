@@ -3,6 +3,7 @@
 //! This crate owns Git command normalization only. Durable Change identity,
 //! canonical artifacts, and integration history remain in `weft-domain`.
 
+use std::collections::BTreeSet;
 use std::fmt::{self, Display, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -99,6 +100,53 @@ impl NativeGitRepository {
     /// Returns an error if the observed ref cannot resolve to a commit.
     pub fn target_matches(&self, reference: &str, expected: &str) -> Result<bool, NativeGitError> {
         Ok(self.resolve_commit(reference)? == expected)
+    }
+
+    /// Lists canonical repository-relative paths changed by two exact commits.
+    ///
+    /// Rename inference is deliberately disabled: an inferred rename is an
+    /// upsert and delete in `tree-delta-v1`, not a mutable provider label.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either reference cannot resolve to a commit or Git
+    /// returns a path that v1's UTF-8 artifact contract cannot represent.
+    pub fn changed_paths(
+        &self,
+        base_reference: &str,
+        revision_reference: &str,
+    ) -> Result<Vec<String>, NativeGitError> {
+        let base_commit = self.resolve_commit(base_reference)?;
+        let revision_commit = self.resolve_commit(revision_reference)?;
+        self.changed_paths_for_commits(&base_commit, &revision_commit)
+    }
+
+    /// Reports paths changed by both revisions relative to one exact base.
+    ///
+    /// The result is sorted and duplicate-free, making it suitable as durable
+    /// overlap evidence after callers bind it to exact revision identities.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the base or either revision cannot resolve exactly.
+    pub fn overlapping_paths(
+        &self,
+        base_reference: &str,
+        left_reference: &str,
+        right_reference: &str,
+    ) -> Result<Vec<String>, NativeGitError> {
+        let base_commit = self.resolve_commit(base_reference)?;
+        let left_commit = self.resolve_commit(left_reference)?;
+        let right_commit = self.resolve_commit(right_reference)?;
+        let left = self
+            .changed_paths_for_commits(&base_commit, &left_commit)?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let right = self
+            .changed_paths_for_commits(&base_commit, &right_commit)?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        Ok(left.intersection(&right).cloned().collect())
     }
 
     /// Captures the exact tree difference between two commits as a
@@ -208,6 +256,38 @@ impl NativeGitRepository {
             mode,
             blob_digest,
         })
+    }
+
+    fn changed_paths_for_commits(
+        &self,
+        base_commit: &str,
+        revision_commit: &str,
+    ) -> Result<Vec<String>, NativeGitError> {
+        let output = run_git_bytes(
+            &self.root,
+            [
+                "diff-tree",
+                "--no-commit-id",
+                "--no-renames",
+                "-r",
+                "--name-only",
+                "-z",
+                base_commit,
+                revision_commit,
+            ],
+        )?;
+        let mut paths = output
+            .split(|byte| *byte == b'\0')
+            .filter(|path| !path.is_empty())
+            .map(|path| {
+                std::str::from_utf8(path)
+                    .map(str::to_owned)
+                    .map_err(NativeGitError::PathEncoding)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
     }
 
     /// Creates a detached worktree at an artifact's exact base and applies its
@@ -515,6 +595,59 @@ mod tests {
             .unwrap();
         assert!(status.success());
         assert!(!repository.target_matches("HEAD", &expected).unwrap());
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn finds_sorted_path_overlap_from_one_exact_base() {
+        let path = temporary_repository();
+        let base = run_git(&path, ["rev-parse", "HEAD"]).unwrap();
+        fs::write(path.join("shared"), "left\n").unwrap();
+        fs::write(path.join("left-only"), "left\n").unwrap();
+        let status = Command::new("git")
+            .args(["add", "shared", "left-only"])
+            .current_dir(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let status = Command::new("git")
+            .args(["commit", "--quiet", "-m", "left"])
+            .current_dir(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let left = run_git(&path, ["rev-parse", "HEAD"]).unwrap();
+        let status = Command::new("git")
+            .args(["checkout", "--quiet", "-b", "overlap-right", &base])
+            .current_dir(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        fs::write(path.join("shared"), "right\n").unwrap();
+        fs::write(path.join("right-only"), "right\n").unwrap();
+        let status = Command::new("git")
+            .args(["add", "shared", "right-only"])
+            .current_dir(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let status = Command::new("git")
+            .args(["commit", "--quiet", "-m", "right"])
+            .current_dir(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let right = run_git(&path, ["rev-parse", "HEAD"]).unwrap();
+
+        let repository = NativeGitRepository::discover(&path).unwrap();
+        assert_eq!(
+            repository.changed_paths(&base, &left).unwrap(),
+            ["left-only", "shared"]
+        );
+        assert_eq!(
+            repository.overlapping_paths(&base, &left, &right).unwrap(),
+            ["shared"]
+        );
         fs::remove_dir_all(path).unwrap();
     }
 
