@@ -86,6 +86,11 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
         arguments.drain(0..2);
         return assign(&mut repository, &change, &mut arguments);
     }
+    if arguments.len() >= 3 && arguments[0] == "change" && arguments[1] == "handoff" {
+        let change = arguments.remove(2);
+        arguments.drain(0..2);
+        return handoff(&mut repository, &change, &mut arguments);
+    }
     if arguments.len() >= 3 && arguments[0] == "change" && arguments[1] == "acquire" {
         let change = arguments.remove(2);
         arguments.drain(0..2);
@@ -201,6 +206,38 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
             "expected `status`, `change create <id>`, or `change show <id>`",
         )),
     }
+}
+
+fn handoff(
+    repository: &mut SqliteRepository,
+    change: &str,
+    arguments: &mut Vec<String>,
+) -> Result<String, CliError> {
+    let assignment = required_option(arguments, "--assignment")?;
+    let subject = required_option(arguments, "--to")?;
+    let actor = required_option(arguments, "--actor")?;
+    let at = required_i64(arguments, "--at")?;
+    if !arguments.is_empty() {
+        return Err(CliError::usage("unexpected change handoff arguments"));
+    }
+    let change = ChangeId::new(change).map_err(|error| CliError::usage(error.to_string()))?;
+    let assignment = Assignment::new(
+        AssignmentId::new(assignment).map_err(|error| CliError::usage(error.to_string()))?,
+        change.clone(),
+        subject,
+        "handoff",
+        actor,
+        at,
+    )
+    .map_err(|error| CliError::usage(error.to_string()))?;
+    repository
+        .record_assignment(&assignment)
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    Ok(format!(
+        "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"handoff\",\"assignmentId\":\"{}\",\"changeId\":\"{}\"}}",
+        escape(assignment.assignment_id().as_str()),
+        escape(change.as_str())
+    ))
 }
 
 fn renew_lease(
