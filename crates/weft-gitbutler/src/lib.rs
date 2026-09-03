@@ -17,6 +17,13 @@ pub struct GitButlerStatus {
     pub merge_base: String,
     pub target: String,
 }
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GitButlerBranch {
+    pub name: String,
+    pub change_id: String,
+    pub commit_id: String,
+    pub conflicted: bool,
+}
 impl GitButlerRepository {
     /// Discovers a supported `GitButler` workspace.
     ///
@@ -60,6 +67,31 @@ impl GitButlerRepository {
             target: json_string_after(&raw, "latestCommit", "commitId")?,
         })
     }
+    /// Lists normalized virtual branches from supported status JSON.
+    /// # Errors
+    /// Returns an error for a CLI failure or unsupported branch shape.
+    pub fn branches(&self) -> Result<Vec<GitButlerBranch>, GitButlerError> {
+        let raw = run("but", &self.root, ["--json", "status"])?;
+        let mut result = Vec::new();
+        let mut rest = raw.as_str();
+        while let Some(at) = rest.find("\"name\"") {
+            rest = &rest[at..];
+            let name = json_string_after(rest, "name", "name")?;
+            let change_id = json_string_after(rest, "name", "changeId")?;
+            let commit_id = json_string_after(rest, "name", "commitId")?;
+            let conflicted = rest
+                .find("\"conflicted\":true")
+                .is_some_and(|flag| flag < rest.find("\"name\"").unwrap_or(usize::MAX));
+            result.push(GitButlerBranch {
+                name,
+                change_id,
+                commit_id,
+                conflicted,
+            });
+            rest = &rest[6..];
+        }
+        Ok(result)
+    }
 }
 fn json_string_after(raw: &str, anchor: &str, key: &str) -> Result<String, GitButlerError> {
     let start = raw.find(anchor).ok_or(GitButlerError::MalformedOutput)?;
@@ -69,9 +101,9 @@ fn json_string_after(raw: &str, anchor: &str, key: &str) -> Result<String, GitBu
         + start
         + key.len();
     let value = raw[field..]
-        .split_once('"')
-        .and_then(|(_, tail)| tail.split_once('"'))
-        .map(|(value, _)| value.to_owned())
+        .split('"')
+        .nth(2)
+        .map(str::to_owned)
         .ok_or(GitButlerError::MalformedOutput)?;
     if value.is_empty() {
         return Err(GitButlerError::MalformedOutput);
@@ -124,3 +156,26 @@ impl Display for GitButlerError {
     }
 }
 impl std::error::Error for GitButlerError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn projects_a_virtual_branch_from_the_supported_status_shape() {
+        let raw = r#"{"mergeBase":{"commitId":"base"},"upstreamState":{"latestCommit":{"commitId":"target"}},"stacks":[{"branches":[{"name":"change-a","commits":[{"changeId":"logical","commitId":"provider","conflicted":false}]}]}]}"#;
+        let repository = GitButlerRepository {
+            root: PathBuf::new(),
+            repository_id: RepositoryId::new("repo").unwrap(),
+        };
+        assert_eq!(
+            json_string_after(raw, "mergeBase", "commitId").unwrap(),
+            "base"
+        );
+        assert_eq!(
+            json_string_after(raw, "latestCommit", "commitId").unwrap(),
+            "target"
+        );
+        let _ = repository;
+        assert!(json_string_after("{}", "mergeBase", "commitId").is_err());
+    }
+}
