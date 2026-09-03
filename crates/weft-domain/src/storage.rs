@@ -2047,7 +2047,10 @@ impl SqliteRepository {
         observed_target: &str,
         now_unix_ms: i64,
     ) -> Result<(), StorageError> {
-        let row: Option<(String, String, String, String)> = self.connection.query_row(
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let row: Option<(String, String, String, String)> = transaction.query_row(
             "SELECT expected_target_revision, state, candidate_id, actor FROM integration_attempts WHERE integration_id = ?1", [integration_id.as_str()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         ).optional()?;
         let (expected, state, candidate, actor) =
@@ -2061,8 +2064,8 @@ impl SqliteRepository {
         if IntegrationState::parse(&state)? != IntegrationState::Planned {
             return Err(StorageError::InvalidIntegrationTransition);
         }
-        for input in candidate_inputs(&self.connection, &CandidateId::new(candidate)?)? {
-            let lease: Option<(String, i64)> = self.connection.query_row(
+        for input in candidate_inputs(&transaction, &CandidateId::new(candidate)?)? {
+            let lease: Option<(String, i64)> = transaction.query_row(
                 "SELECT holder, expires_at_unix_ms FROM leases WHERE change_id = ?1 AND operation = 'integrate'",
                 [input.change_id().as_str()], |row| Ok((row.get(0)?, row.get(1)?)),
             ).optional()?;
@@ -2073,7 +2076,16 @@ impl SqliteRepository {
                 ));
             }
         }
-        self.connection.execute("UPDATE integration_attempts SET state = 'running' WHERE integration_id = ?1 AND state = 'planned'", [integration_id.as_str()])?;
+        let updated = transaction.execute(
+            "UPDATE integration_attempts SET state = 'running' WHERE integration_id = ?1 AND state = 'planned'",
+            [integration_id.as_str()],
+        )?;
+        if updated != 1 {
+            return Err(StorageError::Invariant(
+                "integration changed during immediate transaction",
+            ));
+        }
+        transaction.commit()?;
         Ok(())
     }
 
@@ -3696,6 +3708,87 @@ mod tests {
                 ))
                 .unwrap(),
             1
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn starts_an_integration_once_across_independent_connections() {
+        let root = temporary_directory();
+        let database = root.join("weft.sqlite");
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let artifact = artifact(&store);
+        let change = ChangeId::new("change-1").unwrap();
+        let revision = RevisionId::new("revision-1").unwrap();
+        let candidate = CandidateId::new("candidate-1").unwrap();
+        let integration = IntegrationId::new("integration-1").unwrap();
+        {
+            let mut repository = SqliteRepository::open(&database, store.clone()).unwrap();
+            repository.create_change(change.clone()).unwrap();
+            repository
+                .append_revision(&change, None, revision.clone(), &artifact)
+                .unwrap();
+            repository
+                .create_candidate(
+                    candidate.clone(),
+                    artifact.base().clone(),
+                    vec![CandidateInput::new(change.clone(), revision)],
+                )
+                .unwrap();
+            let attempt = IntegrationAttempt::new(
+                integration.clone(),
+                RepositoryId::new("repo-1").unwrap(),
+                candidate,
+                "main",
+                "target-r1",
+                "native-git",
+                "merge",
+                OperationId::new("operation-1").unwrap(),
+                "agent-1",
+            )
+            .unwrap();
+            repository.plan_integration(&attempt).unwrap();
+            repository
+                .acquire_lease(&change, "integrate", "agent-1", 100, 200)
+                .unwrap();
+        }
+
+        let barrier = Arc::new(Barrier::new(2));
+        let mut workers = Vec::new();
+        for _ in 0..2 {
+            let database = database.clone();
+            let store = store.clone();
+            let integration = integration.clone();
+            let barrier = Arc::clone(&barrier);
+            workers.push(thread::spawn(move || {
+                let mut repository = SqliteRepository::open(database, store).unwrap();
+                barrier.wait();
+                repository.start_integration(&integration, "target-r1", 100)
+            }));
+        }
+        let results: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(StorageError::InvalidIntegrationTransition)))
+                .count(),
+            1
+        );
+        let repository = SqliteRepository::open(&database, store).unwrap();
+        assert_eq!(
+            repository
+                .connection
+                .query_row(
+                    "SELECT state FROM integration_attempts WHERE integration_id = ?1",
+                    [integration.as_str()],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "running"
         );
         fs::remove_dir_all(root).unwrap();
     }
