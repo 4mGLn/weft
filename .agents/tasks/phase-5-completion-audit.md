@@ -2,7 +2,7 @@
 
 Date: 2026-09-03
 
-The published [Agent Protocol v1](../AGENT_PROTOCOL.md) covers discovery,
+The published [Agent Protocol v1](../../docs/AGENT_PROTOCOL.md) covers discovery,
 acquisition, inspection, materialization, revision CAS, progress/history,
 handoff, review, validation, release/integration, and reconciliation using the
 provider-neutral CLI JSON contract. It explicitly classifies stale heads, lost

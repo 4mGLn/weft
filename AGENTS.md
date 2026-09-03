@@ -12,9 +12,9 @@ This is the canonical project context for coding agents. Keep it concise and lin
 | Working protocol | `docs/agent-harness/README.md` |
 | Task/checkpoint format | `docs/agent-harness/task-template.md` |
 | Required proof by change class | `docs/agent-harness/verification-matrix.md` |
-| Durable architecture decisions | `docs/decisions/` |
-| Current project evidence | `.agent/PROGRESS.md` |
-| Current decision ledger | `.agent/DECISIONS.md` |
+| Durable architecture decisions | `.agents/decisions/` |
+| Current project evidence | `.agents/PROGRESS.md` |
+| Current decision ledger | `.agents/DECISIONS.md` |
 | Development commands | `docs/DEVELOPMENT.md` |
 | Release/deployment policy | `docs/DEPLOYMENT.md` |
 

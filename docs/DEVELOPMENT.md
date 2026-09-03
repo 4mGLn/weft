@@ -35,7 +35,7 @@ The orchestrator-facing ordering and blocking contract is documented in
 6. Run focused proof, then the verification-matrix gates.
 7. Record decisions, results, residual risks, and unavailable environments.
 
-Use `.agent/PROGRESS.md` for current project checkpoints and `.agent/DECISIONS.md` as a concise index into durable ADRs. Put large temporary evidence under `.agent/references/`; archive completed working plans under `.agent/archive/`.
+Use `.agents/PROGRESS.md` for current project checkpoints and `.agents/DECISIONS.md` as a concise index into durable ADRs. Put large temporary evidence under `.agents/references/`; archive completed working plans under `.agents/archive/`. Durable architecture decisions live under `.agents/decisions/`, phase evidence under `.agents/phase0/`, and task records under `.agents/tasks/`.
 
 ## Source-of-truth order
 

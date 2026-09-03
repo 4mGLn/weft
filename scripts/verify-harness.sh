@@ -10,8 +10,8 @@ required=(
   docs/agent-harness/README.md
   docs/agent-harness/task-template.md
   docs/agent-harness/verification-matrix.md
-  docs/decisions/README.md
-  .agent/PROGRESS.md .agent/DECISIONS.md
+  .agents/decisions/README.md
+  .agents/PROGRESS.md .agents/DECISIONS.md
 )
 
 for path in "${required[@]}"; do

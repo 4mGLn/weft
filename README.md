@@ -6,10 +6,10 @@ It treats a Change—not a branch, worktree, commit, or agent session—as the d
 
 ## Project status
 
-Weft completed its Phase 0 provider feasibility baseline and has a Phase 1 Rust
-domain kernel with SQLite Change/Revision persistence and a verified filesystem
-canonical-artifact store. Provider adapters, CLI, deployment image, and
-compatibility guarantees are not implemented yet.
+Weft has completed the Phase 0–7 roadmap: the durable Rust domain kernel,
+Native Git and GitButler provider adapters, JSON CLI, agent protocol, Paseo
+bridge, and multi-agent workflow contracts are implemented and acceptance-tested.
+Remaining scope boundaries are recorded in `.agents/PROGRESS.md`.
 
 ## Start here
 
@@ -35,7 +35,7 @@ make phase0-gitbutler-spike
 
 The Phase 1 domain kernel is verified by `make check` and lives under `crates/weft-domain`.
 
-Material changes should start from the [task record template](docs/agent-harness/task-template.md), use the [verification matrix](docs/agent-harness/verification-matrix.md), and record durable design decisions under `docs/decisions/`.
+Material changes should start from the [task record template](docs/agent-harness/task-template.md), use the [verification matrix](docs/agent-harness/verification-matrix.md), and record durable design decisions under `.agents/decisions/`.
 
 ## Architecture at a glance
 

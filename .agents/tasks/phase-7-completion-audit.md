@@ -2,7 +2,7 @@
 
 Date: 2026-09-03
 
-The [Multi-Agent Workflow Contract](../MULTI_AGENT_WORKFLOWS.md) publishes
+The [Multi-Agent Workflow Contract](../../docs/MULTI_AGENT_WORKFLOWS.md) publishes
 dependency-aware execution requests, reviewer/resolver handoff, validation
 pipelines, immutable candidate composition, and lease/target-governed integration
 ordering. It maps each requested action to existing durable CLI operations.

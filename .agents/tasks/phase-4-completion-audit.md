@@ -9,7 +9,7 @@ assignment and handoff history, acquire/renew/release leases, exact dependency
 pins and relations, versioned stacks, immutable candidates, materializations,
 reviews, validations, conflicts, integration planning/execution/reconciliation,
 and Change audit history. The canonical grammar, JSON envelope, and exit codes
-are documented in [CLI v1](../CLI.md).
+are documented in [CLI v1](../../docs/CLI.md).
 
 Native Git is the supported CLI mutation provider. GitButler remains exposed
 through the reusable adapter API and returns an explicit unsupported CLI result

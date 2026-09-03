@@ -28,7 +28,7 @@
 
 ## Evidence and plan
 
-- **Relevant paths, symbols, decisions, and tests:** `crates/weft-native-git/src/lib.rs`, `crates/weft-domain/src/artifact.rs`, `crates/weft-domain/src/storage.rs`, `docs/decisions/0002-implementation-foundation.md`.
+- **Relevant paths, symbols, decisions, and tests:** `crates/weft-native-git/src/lib.rs`, `crates/weft-domain/src/artifact.rs`, `crates/weft-domain/src/storage.rs`, `.agents/decisions/0002-implementation-foundation.md`.
 - **Reproduction or baseline:** Phase 0 established the Git plumbing feasibility; Phase 1 established validated artifacts and durable CAS.
 - **Official version-sensitive evidence:** Local Git commands only; supported plumbing behavior is exercised against temporary repositories in the provider crate tests.
 - **Required decision/documentation updates:** This task record and progress ledger record the completed slice; no new architecture decision is required.
