@@ -3,7 +3,11 @@
 use std::fmt::{self, Display, Formatter};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use weft_domain::{CanonicalArtifact, ContentStore, RepositoryId};
+use weft_domain::{
+    AuditContext, CanonicalArtifact, ConflictId, ContentStore, IntegrationAttempt,
+    IntegrationConflict, IntegrationReceipt, IntegrationReceiptId, IntegrationState,
+    ReconciliationId, ReconciliationRecord, RepositoryId, SqliteRepository, StorageError,
+};
 use weft_native_git::NativeGitRepository;
 
 const SUPPORTED_VERSION: &str = "0.22.";
@@ -24,6 +28,62 @@ pub struct GitButlerBranch {
     pub change_id: String,
     pub commit_id: String,
     pub conflicted: bool,
+}
+
+/// Evidence returned only after a whole-stack landing is re-observed at its target.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GitButlerIntegrationReceipt {
+    prior_target: String,
+    result_target: String,
+    branch: GitButlerBranch,
+}
+
+/// Result of reconciling a running `GitButler` landing attempt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GitButlerReconciliation {
+    Confirmed { result_target: String },
+    Diverged { observed_target: String },
+}
+
+/// Durable `GitButler` integration outcome classification.
+#[derive(Debug)]
+pub enum GitButlerExecutionError {
+    Storage(StorageError),
+    Provider(GitButlerError),
+    Conflict,
+    Uncertain,
+}
+
+impl Display for GitButlerExecutionError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Storage(error) => write!(f, "durable integration state failed: {error}"),
+            Self::Provider(error) => write!(f, "GitButler integration failed: {error}"),
+            Self::Conflict => f.write_str("GitButler integration conflicted"),
+            Self::Uncertain => {
+                f.write_str("GitButler landing outcome is uncertain and requires reconciliation")
+            }
+        }
+    }
+}
+
+impl std::error::Error for GitButlerExecutionError {}
+
+impl GitButlerIntegrationReceipt {
+    #[must_use]
+    pub fn prior_target(&self) -> &str {
+        &self.prior_target
+    }
+
+    #[must_use]
+    pub fn result_target(&self) -> &str {
+        &self.result_target
+    }
+
+    #[must_use]
+    pub fn branch(&self) -> &GitButlerBranch {
+        &self.branch
+    }
 }
 impl GitButlerRepository {
     /// Discovers a supported `GitButler` workspace.
@@ -165,6 +225,220 @@ impl GitButlerRepository {
         run("but", &self.root, ["pull"])?;
         self.status()
     }
+
+    /// Executes a persisted whole-stack landing against the configured target.
+    ///
+    /// The target is observed before transition to `running` and again after
+    /// `GitButler` reports success. A command failure after that transition is
+    /// intentionally left running with reconciliation evidence, because the
+    /// provider may have mutated target state before it returned an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an explicit durable conflict for a stale target or conflicted
+    /// branch, and an explicit uncertain result for an unverified landing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_integration(
+        &self,
+        domain: &mut SqliteRepository,
+        attempt: &IntegrationAttempt,
+        branch_name: &str,
+        receipt_id: IntegrationReceiptId,
+        conflict_id: ConflictId,
+        reconciliation_id: ReconciliationId,
+        audit: &AuditContext,
+        now_unix_ms: i64,
+    ) -> Result<GitButlerIntegrationReceipt, GitButlerExecutionError> {
+        if attempt.repository_id() != &self.repository_id || attempt.provider() != "gitbutler" {
+            return Err(GitButlerExecutionError::Provider(
+                GitButlerError::RepositoryMismatch,
+            ));
+        }
+        let status = self.status().map_err(GitButlerExecutionError::Provider)?;
+        if status.target != attempt.expected_target_revision() {
+            Self::record_conflict(
+                domain,
+                attempt,
+                conflict_id,
+                &status.target,
+                "target-observation",
+                audit,
+            )?;
+            return Err(GitButlerExecutionError::Conflict);
+        }
+        domain
+            .start_integration(attempt.id(), &status.target, now_unix_ms)
+            .map_err(GitButlerExecutionError::Storage)?;
+        let branch = self
+            .branches()
+            .map_err(GitButlerExecutionError::Provider)?
+            .into_iter()
+            .find(|branch| branch.name == branch_name)
+            .ok_or(GitButlerExecutionError::Provider(
+                GitButlerError::MalformedOutput,
+            ))?;
+        if branch.conflicted {
+            Self::record_conflict(
+                domain,
+                attempt,
+                conflict_id,
+                &status.target,
+                "branch-conflicted",
+                audit,
+            )?;
+            return Err(GitButlerExecutionError::Conflict);
+        }
+        if self.land_whole_stack(branch_name).is_err() {
+            Self::record_uncertain(
+                domain,
+                attempt,
+                reconciliation_id,
+                "landing-command-error",
+                audit,
+            )?;
+            return Err(GitButlerExecutionError::Uncertain);
+        }
+        let observed = if let Ok(status) = self.status() {
+            status.target
+        } else {
+            Self::record_uncertain(
+                domain,
+                attempt,
+                reconciliation_id,
+                "landing-postcheck-error",
+                audit,
+            )?;
+            return Err(GitButlerExecutionError::Uncertain);
+        };
+        let receipt = IntegrationReceipt::new(
+            receipt_id,
+            attempt.id().clone(),
+            attempt.expected_target_revision(),
+            &observed,
+            format!(
+                "gitbutler;branch:{};change:{};commit:{}",
+                branch.name, branch.change_id, branch.commit_id
+            ),
+        )
+        .map_err(GitButlerExecutionError::Storage)?;
+        domain
+            .finish_integration(
+                attempt.id(),
+                IntegrationState::Succeeded,
+                Some(&receipt),
+                audit,
+            )
+            .map_err(GitButlerExecutionError::Storage)?;
+        Ok(GitButlerIntegrationReceipt {
+            prior_target: status.target,
+            result_target: observed,
+            branch,
+        })
+    }
+
+    /// Re-observes a running landing and completes it only at the exact result.
+    ///
+    /// # Errors
+    ///
+    /// Returns a provider or persistence error without asserting an outcome.
+    pub fn reconcile_integration(
+        &self,
+        domain: &mut SqliteRepository,
+        attempt: &IntegrationAttempt,
+        expected_result: &str,
+        receipt_id: IntegrationReceiptId,
+        reconciliation_id: ReconciliationId,
+        audit: &AuditContext,
+    ) -> Result<GitButlerReconciliation, GitButlerExecutionError> {
+        let observed = self
+            .status()
+            .map_err(GitButlerExecutionError::Provider)?
+            .target;
+        let confirmed = observed == expected_result;
+        let record = ReconciliationRecord::new(
+            reconciliation_id,
+            attempt.id().clone(),
+            if confirmed {
+                "target-confirmed"
+            } else {
+                "target-diverged"
+            },
+            format!("expected:{expected_result};observed:{observed}"),
+            confirmed,
+        )
+        .map_err(GitButlerExecutionError::Storage)?;
+        domain
+            .record_reconciliation(&record, audit)
+            .map_err(GitButlerExecutionError::Storage)?;
+        if !confirmed {
+            return Ok(GitButlerReconciliation::Diverged {
+                observed_target: observed,
+            });
+        }
+        let receipt = IntegrationReceipt::new(
+            receipt_id,
+            attempt.id().clone(),
+            attempt.expected_target_revision(),
+            expected_result,
+            format!("gitbutler;reconciled-target:{}", attempt.target_ref()),
+        )
+        .map_err(GitButlerExecutionError::Storage)?;
+        domain
+            .finish_integration(
+                attempt.id(),
+                IntegrationState::Succeeded,
+                Some(&receipt),
+                audit,
+            )
+            .map_err(GitButlerExecutionError::Storage)?;
+        Ok(GitButlerReconciliation::Confirmed {
+            result_target: observed,
+        })
+    }
+
+    fn record_conflict(
+        domain: &mut SqliteRepository,
+        attempt: &IntegrationAttempt,
+        conflict_id: ConflictId,
+        observed_target: &str,
+        operation: &str,
+        audit: &AuditContext,
+    ) -> Result<(), GitButlerExecutionError> {
+        let conflict = IntegrationConflict::new(
+            conflict_id,
+            attempt.id().clone(),
+            attempt.candidate_id().clone(),
+            format!("gitbutler-target:{observed_target}"),
+            operation,
+            None,
+            Some(observed_target.to_owned()),
+            None,
+        )
+        .map_err(GitButlerExecutionError::Storage)?;
+        domain
+            .record_integration_conflict(&conflict, audit)
+            .map_err(GitButlerExecutionError::Storage)
+    }
+
+    fn record_uncertain(
+        domain: &mut SqliteRepository,
+        attempt: &IntegrationAttempt,
+        reconciliation_id: ReconciliationId,
+        detail: &str,
+        audit: &AuditContext,
+    ) -> Result<(), GitButlerExecutionError> {
+        let record = ReconciliationRecord::new(
+            reconciliation_id,
+            attempt.id().clone(),
+            "landing-uncertain",
+            detail,
+            false,
+        )
+        .map_err(GitButlerExecutionError::Storage)?;
+        domain
+            .record_reconciliation(&record, audit)
+            .map_err(GitButlerExecutionError::Storage)
+    }
 }
 
 fn branches_from_status(raw: &str) -> Result<Vec<GitButlerBranch>, GitButlerError> {
@@ -258,6 +532,7 @@ pub enum GitButlerError {
     Native(weft_native_git::NativeGitError),
     Command(String),
     UnsupportedVersion(String),
+    RepositoryMismatch,
     MalformedOutput,
 }
 impl Display for GitButlerError {
@@ -269,6 +544,9 @@ impl Display for GitButlerError {
             Self::Native(e) => write!(f, "GitButler canonical export failed: {e}"),
             Self::Command(e) => write!(f, "GitButler failed: {e}"),
             Self::UnsupportedVersion(v) => write!(f, "unsupported GitButler version: {v}"),
+            Self::RepositoryMismatch => {
+                f.write_str("integration attempt does not belong to this GitButler repository")
+            }
             Self::MalformedOutput => f.write_str("GitButler emitted malformed output"),
         }
     }
