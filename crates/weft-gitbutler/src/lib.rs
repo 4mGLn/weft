@@ -130,6 +130,20 @@ impl GitButlerRepository {
         )
         .map(|_| ())
     }
+
+    /// Lands one complete virtual stack.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `GitButler` refuses to land the stack.
+    pub fn land_whole_stack(&self, branch: &str) -> Result<(), GitButlerError> {
+        run(
+            "but",
+            &self.root,
+            ["land", branch, "--whole-stack", "--yes"],
+        )
+        .map(|_| ())
+    }
 }
 fn json_string_after(raw: &str, anchor: &str, key: &str) -> Result<String, GitButlerError> {
     let start = raw.find(anchor).ok_or(GitButlerError::MalformedOutput)?;
