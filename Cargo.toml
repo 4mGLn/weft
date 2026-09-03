@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/weft-domain"]
+members = ["crates/weft-domain", "crates/weft-native-git"]
 resolver = "3"
 
 [workspace.package]

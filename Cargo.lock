@@ -199,3 +199,10 @@ dependencies = [
  "rusqlite",
  "sha2",
 ]
+
+[[package]]
+name = "weft-native-git"
+version = "0.1.0"
+dependencies = [
+ "weft-domain",
+]
