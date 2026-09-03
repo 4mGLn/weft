@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use weft_domain::{
     Assignment, AssignmentId, AuditContext, CandidateId, CandidateInput, ChangeId, ContentStore,
     Dependency, MaterializationId, MaterializationState, RevisionId, SqliteRepository, StackId,
-    WorkspaceId,
+    Target, ValidationResult, ValidationResultId, ValidationStatus, WorkspaceId,
 };
 use weft_native_git::NativeGitRepository;
 
@@ -114,6 +114,11 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
         arguments.drain(0..2);
         return transition_materialization(&mut repository, &id, &mut arguments);
     }
+    if arguments.len() >= 3 && arguments[0] == "validation" && arguments[1] == "record" {
+        let id = arguments.remove(2);
+        arguments.drain(0..2);
+        return record_validation(&mut repository, &id, &mut arguments);
+    }
     match arguments.as_slice() {
         [command] if command == "status" => Ok(format!(
             "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"status\",\"stateDirectory\":\"{}\"}}",
@@ -145,6 +150,80 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
         _ => Err(CliError::usage(
             "expected `status`, `change create <id>`, or `change show <id>`",
         )),
+    }
+}
+
+fn record_validation(
+    repository: &mut SqliteRepository,
+    id: &str,
+    arguments: &mut Vec<String>,
+) -> Result<String, CliError> {
+    let target = parse_target(&required_option(arguments, "--target")?)?;
+    let kind = required_option(arguments, "--kind")?;
+    let environment = required_option(arguments, "--environment")?;
+    let status = parse_validation_status(&required_option(arguments, "--status")?)?;
+    let execution = required_option(arguments, "--execution")?;
+    let at = required_i64(arguments, "--at")?;
+    if !arguments.is_empty() {
+        return Err(CliError::usage("unexpected validation record arguments"));
+    }
+    let result = ValidationResult::new(
+        ValidationResultId::new(id).map_err(|error| CliError::usage(error.to_string()))?,
+        target.clone(),
+        kind,
+        environment,
+        status,
+        execution,
+        at,
+    )
+    .map_err(|error| CliError::usage(error.to_string()))?;
+    repository
+        .record_validation(&result)
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    Ok(format!(
+        "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"validation\",\"validationId\":\"{}\",\"target\":\"{}\",\"status\":\"{}\"}}",
+        escape(id),
+        escape(&target_name(&target)),
+        validation_status_name(status)
+    ))
+}
+fn parse_target(value: &str) -> Result<Target, CliError> {
+    let (kind, id) = value
+        .split_once(':')
+        .ok_or_else(|| CliError::usage("target must be revision:<id> or candidate:<id>"))?;
+    match kind {
+        "revision" => Ok(Target::Revision(
+            RevisionId::new(id).map_err(|error| CliError::usage(error.to_string()))?,
+        )),
+        "candidate" => Ok(Target::Candidate(
+            CandidateId::new(id).map_err(|error| CliError::usage(error.to_string()))?,
+        )),
+        _ => Err(CliError::usage(
+            "target must be revision:<id> or candidate:<id>",
+        )),
+    }
+}
+fn target_name(value: &Target) -> String {
+    match value {
+        Target::Revision(id) => format!("revision:{}", id.as_str()),
+        Target::Candidate(id) => format!("candidate:{}", id.as_str()),
+    }
+}
+fn parse_validation_status(value: &str) -> Result<ValidationStatus, CliError> {
+    match value {
+        "passed" => Ok(ValidationStatus::Passed),
+        "failed" => Ok(ValidationStatus::Failed),
+        "blocked" => Ok(ValidationStatus::Blocked),
+        _ => Err(CliError::usage(
+            "validation status must be passed, failed, or blocked",
+        )),
+    }
+}
+fn validation_status_name(value: ValidationStatus) -> &'static str {
+    match value {
+        ValidationStatus::Passed => "passed",
+        ValidationStatus::Failed => "failed",
+        ValidationStatus::Blocked => "blocked",
     }
 }
 
