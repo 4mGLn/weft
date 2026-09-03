@@ -3,7 +3,8 @@
 use std::fmt::{self, Display, Formatter};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use weft_domain::RepositoryId;
+use weft_domain::{CanonicalArtifact, ContentStore, RepositoryId};
+use weft_native_git::NativeGitRepository;
 
 const SUPPORTED_VERSION: &str = "0.22.";
 
@@ -98,6 +99,33 @@ impl GitButlerRepository {
             .into_iter()
             .find(|branch| branch.name == name)
             .ok_or(GitButlerError::MalformedOutput)
+    }
+
+    /// Exports a current virtual branch as provider-independent canonical content.
+    ///
+    /// The branch's logical and commit IDs remain provider references. The
+    /// returned artifact stores only the exact base and canonical file content.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the named branch is absent, the base or provider
+    /// commit cannot be resolved exactly, or canonical content cannot be saved.
+    pub fn export_branch_artifact(
+        &self,
+        base_commit: &str,
+        name: &str,
+        content_store: &ContentStore,
+    ) -> Result<(GitButlerBranch, CanonicalArtifact), GitButlerError> {
+        let branch = self
+            .branches()?
+            .into_iter()
+            .find(|branch| branch.name == name)
+            .ok_or(GitButlerError::MalformedOutput)?;
+        let native = NativeGitRepository::discover(&self.root).map_err(GitButlerError::Native)?;
+        let artifact = native
+            .capture_revision(base_commit, &branch.commit_id, content_store)
+            .map_err(GitButlerError::Native)?;
+        Ok((branch, artifact))
     }
 
     /// Creates a virtual branch anchored above an existing branch.
@@ -227,6 +255,7 @@ pub enum GitButlerError {
     Io(std::io::Error),
     Utf8(std::string::FromUtf8Error),
     Domain(weft_domain::ChangeError),
+    Native(weft_native_git::NativeGitError),
     Command(String),
     UnsupportedVersion(String),
     MalformedOutput,
@@ -237,6 +266,7 @@ impl Display for GitButlerError {
             Self::Io(e) => write!(f, "GitButler invocation failed: {e}"),
             Self::Utf8(e) => write!(f, "GitButler emitted invalid UTF-8: {e}"),
             Self::Domain(e) => write!(f, "invalid GitButler identity: {e}"),
+            Self::Native(e) => write!(f, "GitButler canonical export failed: {e}"),
             Self::Command(e) => write!(f, "GitButler failed: {e}"),
             Self::UnsupportedVersion(v) => write!(f, "unsupported GitButler version: {v}"),
             Self::MalformedOutput => f.write_str("GitButler emitted malformed output"),
