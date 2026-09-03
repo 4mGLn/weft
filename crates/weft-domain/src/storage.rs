@@ -2759,6 +2759,7 @@ impl SqliteRepository {
         expected_version: Option<i64>,
         changes: Vec<ChangeId>,
     ) -> Result<StackVersion, StorageError> {
+        let audit = AuditContext::local();
         if changes.is_empty() {
             return Err(StorageError::EmptyStack);
         }
@@ -2804,6 +2805,16 @@ impl SqliteRepository {
             ensure_change_exists(&transaction, change)?;
             transaction.execute("INSERT INTO stack_entries(stack_id, version, position, change_id) VALUES (?1, ?2, ?3, ?4)", params![stack_id.as_str(), version, position, change.as_str()])?;
         }
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('stack-versioned', ?1, ?2, ?3, ?4, ?5, NULL, NULL)",
+            params![
+                audit.actor,
+                audit.occurred_at_unix_ms,
+                expected_version.map_or_else(|| "absent".to_owned(), |value| value.to_string()),
+                version.to_string(),
+                format!("{}@{}", stack_id.as_str(), version),
+            ],
+        )?;
         transaction.commit()?;
         Ok(StackVersion {
             stack_id,
