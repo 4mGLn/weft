@@ -16,7 +16,7 @@ use crate::{
     ReviewSubmissionId, RevisionId, StackId, ValidationResultId, WorkspaceId,
 };
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 static NEXT_TEMPORARY_OBJECT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
@@ -196,6 +196,55 @@ pub struct AuditEvent {
     change_id: ChangeId,
     kind: String,
     detail: String,
+}
+
+/// Complete append-only evidence for a correctness-sensitive domain mutation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DomainEvent {
+    event_id: i64,
+    kind: String,
+    actor: String,
+    occurred_at_unix_ms: i64,
+    expected_state: String,
+    resulting_state: String,
+    affected_ids: String,
+    operation_id: Option<String>,
+    provider_evidence: Option<String>,
+}
+impl DomainEvent {
+    /// # Errors
+    /// Returns an error for invalid event metadata.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        kind: impl Into<String>,
+        actor: impl Into<String>,
+        occurred_at_unix_ms: i64,
+        expected_state: impl Into<String>,
+        resulting_state: impl Into<String>,
+        affected_ids: impl Into<String>,
+        operation_id: Option<String>,
+        provider_evidence: Option<String>,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            event_id: 0,
+            kind: valid_event_value(kind.into(), "event kind")?,
+            actor: valid_event_value(actor.into(), "actor")?,
+            occurred_at_unix_ms,
+            expected_state: valid_event_value(expected_state.into(), "expected state")?,
+            resulting_state: valid_event_value(resulting_state.into(), "resulting state")?,
+            affected_ids: valid_event_value(affected_ids.into(), "affected ids")?,
+            operation_id: operation_id
+                .map(|value| valid_event_value(value, "operation id"))
+                .transpose()?,
+            provider_evidence: provider_evidence
+                .map(|value| valid_event_value(value, "provider evidence"))
+                .transpose()?,
+        })
+    }
+    #[must_use]
+    pub const fn event_id(&self) -> i64 {
+        self.event_id
+    }
 }
 
 /// A durable record that a subject holds a role on a Change.
@@ -854,6 +903,12 @@ impl SqliteRepository {
                  change_id TEXT NOT NULL REFERENCES changes(change_id) ON DELETE RESTRICT,
                  kind TEXT NOT NULL,
                  detail TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS domain_events (
+                 event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 kind TEXT NOT NULL, actor TEXT NOT NULL, occurred_at_unix_ms INTEGER NOT NULL,
+                 expected_state TEXT NOT NULL, resulting_state TEXT NOT NULL, affected_ids TEXT NOT NULL,
+                 operation_id TEXT NULL, provider_evidence TEXT NULL
              );
              CREATE TABLE IF NOT EXISTS dependencies (
                  upstream_change_id TEXT NOT NULL REFERENCES changes(change_id) ON DELETE RESTRICT,
@@ -1908,6 +1963,18 @@ impl SqliteRepository {
             version,
             changes,
         })
+    }
+
+    /// Appends complete domain evidence without mutating historical events.
+    /// # Errors
+    /// Returns an error if storage cannot persist the event.
+    pub fn record_domain_event(&mut self, event: &mut DomainEvent) -> Result<(), StorageError> {
+        self.connection.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![event.kind, event.actor, event.occurred_at_unix_ms, event.expected_state, event.resulting_state, event.affected_ids, event.operation_id, event.provider_evidence],
+        )?;
+        event.event_id = self.connection.last_insert_rowid();
+        Ok(())
     }
 }
 
@@ -3123,6 +3190,48 @@ mod tests {
             ),
             Err(StorageError::DuplicateStackEntry)
         ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn persists_complete_domain_event_evidence() {
+        let root = temporary_directory();
+        let database = root.join("weft.sqlite");
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let mut event = DomainEvent::new(
+            "integration-started",
+            "agent-1",
+            100,
+            "planned",
+            "running",
+            "integration-1,candidate-1",
+            Some("operation-1".to_owned()),
+            Some("provider inspected target-r1".to_owned()),
+        )
+        .unwrap();
+        {
+            let mut repository = SqliteRepository::open(&database, store.clone()).unwrap();
+            repository.record_domain_event(&mut event).unwrap();
+            assert!(event.event_id() > 0);
+        }
+        let repository = SqliteRepository::open(&database, store).unwrap();
+        let row: (String, String, i64, String, String, String, Option<String>, Option<String>) = repository.connection.query_row(
+            "SELECT kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence FROM domain_events WHERE event_id = ?1", [event.event_id()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?)),
+        ).unwrap();
+        assert_eq!(
+            row,
+            (
+                "integration-started".to_owned(),
+                "agent-1".to_owned(),
+                100,
+                "planned".to_owned(),
+                "running".to_owned(),
+                "integration-1,candidate-1".to_owned(),
+                Some("operation-1".to_owned()),
+                Some("provider inspected target-r1".to_owned())
+            )
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

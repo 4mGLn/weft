@@ -13,7 +13,7 @@ pub use change::{
 };
 pub use storage::{
     Assignment, AuditEvent, CandidateInput, CompositionCandidate, ContentStore, Dependency,
-    IntegrationAttempt, IntegrationReceipt, IntegrationState, Lease, Materialization,
+    DomainEvent, IntegrationAttempt, IntegrationReceipt, IntegrationState, Lease, Materialization,
     MaterializationState, ReviewOutcome, ReviewRequest, ReviewSubmission, SqliteRepository,
     StackVersion, StorageError, StoredChange, Target, ValidationResult, ValidationStatus,
 };
