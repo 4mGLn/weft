@@ -721,3 +721,72 @@ fn escape(value: &str) -> String {
         .replace('\n', "\\n")
         .replace('\r', "\\r")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn state_directory() -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("weft-cli-contract-{nonce}"))
+    }
+
+    #[test]
+    fn change_json_contract_persists_and_classifies_errors() {
+        let state = state_directory();
+        let state = state.to_str().unwrap().to_owned();
+        let status = execute(vec![
+            "--state".to_owned(),
+            state.clone(),
+            "status".to_owned(),
+            "--json".to_owned(),
+        ])
+        .unwrap();
+        assert_eq!(
+            status,
+            format!("{{\"schemaVersion\":1,\"kind\":\"status\",\"stateDirectory\":\"{state}\"}}")
+        );
+        let created = execute(vec![
+            "--state".to_owned(),
+            state.clone(),
+            "change".to_owned(),
+            "create".to_owned(),
+            "change-1".to_owned(),
+            "--json".to_owned(),
+        ])
+        .unwrap();
+        assert_eq!(
+            created,
+            "{\"schemaVersion\":1,\"kind\":\"change\",\"changeId\":\"change-1\",\"headRevisionId\":null}"
+        );
+        let shown = execute(vec![
+            "--state".to_owned(),
+            state.clone(),
+            "change".to_owned(),
+            "show".to_owned(),
+            "change-1".to_owned(),
+            "--json".to_owned(),
+        ])
+        .unwrap();
+        assert_eq!(shown, created);
+        let missing = execute(vec![
+            "--state".to_owned(),
+            state.clone(),
+            "change".to_owned(),
+            "show".to_owned(),
+            "missing".to_owned(),
+            "--json".to_owned(),
+        ])
+        .unwrap_err();
+        assert_eq!(missing.code(), "domain");
+        assert_eq!(missing.exit_code(), 3);
+        let usage = execute(vec!["status".to_owned()]).unwrap_err();
+        assert_eq!(usage.code(), "usage");
+        assert_eq!(usage.exit_code(), 2);
+        std::fs::remove_dir_all(state).unwrap();
+    }
+}
