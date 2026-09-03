@@ -13,11 +13,11 @@ use crate::artifact::{PathOperation, is_sha256_digest, sha256_digest};
 use crate::{
     AssignmentId, BaseState, CandidateId, CanonicalArtifact, ChangeError, ChangeId, ConflictId,
     IntegrationId, IntegrationReceiptId, MaterializationId, OperationId, OverlapId,
-    ReconciliationId, RepositoryId, ReviewRequestId, ReviewSubmissionId, RevisionId, StackId,
-    ValidationResultId, WorkspaceId,
+    ReconciliationId, RepositoryId, ReuseDecisionId, ReviewRequestId, ReviewSubmissionId,
+    RevisionId, StackId, ValidationResultId, WorkspaceId,
 };
 
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
 static NEXT_TEMPORARY_OBJECT: AtomicU64 = AtomicU64::new(0);
 
 type IntegrationAttemptRow = (
@@ -529,6 +529,81 @@ impl Target {
             Self::Revision(id) => id.as_str(),
             Self::Candidate(id) => id.as_str(),
         }
+    }
+}
+
+/// The exact evidence class whose reuse was explicitly authorized.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReuseEvidenceKind {
+    Review,
+    Validation,
+}
+impl ReuseEvidenceKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Review => "review",
+            Self::Validation => "validation",
+        }
+    }
+}
+
+/// An explicit authorization to reuse evidence from one exact target for another.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReuseDecision {
+    id: ReuseDecisionId,
+    evidence_kind: ReuseEvidenceKind,
+    source: Target,
+    target: Target,
+    actor: String,
+    decided_at_unix_ms: i64,
+    rationale: String,
+}
+impl ReuseDecision {
+    /// Creates a decision that explicitly authorizes cross-target evidence reuse.
+    ///
+    /// # Errors
+    /// Returns an error for same-target reuse or invalid actor/rationale metadata.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: ReuseDecisionId,
+        evidence_kind: ReuseEvidenceKind,
+        source: Target,
+        target: Target,
+        actor: impl Into<String>,
+        decided_at_unix_ms: i64,
+        rationale: impl Into<String>,
+    ) -> Result<Self, StorageError> {
+        if source == target {
+            return Err(StorageError::Invariant(
+                "reuse decision requires distinct exact targets",
+            ));
+        }
+        Ok(Self {
+            id,
+            evidence_kind,
+            source,
+            target,
+            actor: valid_event_value(actor.into(), "reuse decision actor")?,
+            decided_at_unix_ms,
+            rationale: valid_event_value(rationale.into(), "reuse decision rationale")?,
+        })
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &ReuseDecisionId {
+        &self.id
+    }
+    #[must_use]
+    pub const fn evidence_kind(&self) -> ReuseEvidenceKind {
+        self.evidence_kind
+    }
+    #[must_use]
+    pub fn source(&self) -> &Target {
+        &self.source
+    }
+    #[must_use]
+    pub fn target(&self) -> &Target {
+        &self.target
     }
 }
 
@@ -1194,6 +1269,18 @@ impl SqliteRepository {
                  status TEXT NOT NULL,
                  execution_id TEXT NOT NULL,
                  recorded_at_unix_ms INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS reuse_decisions (
+                 reuse_decision_id TEXT PRIMARY KEY NOT NULL,
+                 evidence_kind TEXT NOT NULL CHECK(evidence_kind IN ('review', 'validation')),
+                 source_target_kind TEXT NOT NULL,
+                 source_target_id TEXT NOT NULL,
+                 target_kind TEXT NOT NULL,
+                 target_id TEXT NOT NULL,
+                 actor TEXT NOT NULL,
+                 decided_at_unix_ms INTEGER NOT NULL,
+                 rationale TEXT NOT NULL,
+                 CHECK(source_target_kind <> target_kind OR source_target_id <> target_id)
              );
              CREATE TABLE IF NOT EXISTS integration_attempts (
                  integration_id TEXT PRIMARY KEY NOT NULL,
@@ -2241,6 +2328,90 @@ impl SqliteRepository {
         Ok(())
     }
 
+    /// Records an explicit, auditable authorization to reuse exact review or
+    /// validation evidence between two distinct immutable targets.
+    ///
+    /// # Errors
+    /// Returns an error for missing targets, duplicate decisions, or storage failure.
+    pub fn record_reuse_decision(&mut self, decision: &ReuseDecision) -> Result<(), StorageError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_target_exists(&transaction, &decision.source)?;
+        ensure_target_exists(&transaction, &decision.target)?;
+        let inserted = transaction.execute(
+            "INSERT OR IGNORE INTO reuse_decisions(reuse_decision_id, evidence_kind, source_target_kind, source_target_id, target_kind, target_id, actor, decided_at_unix_ms, rationale) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                decision.id.as_str(),
+                decision.evidence_kind.as_str(),
+                decision.source.kind(),
+                decision.source.id(),
+                decision.target.kind(),
+                decision.target.id(),
+                decision.actor,
+                decision.decided_at_unix_ms,
+                decision.rationale,
+            ],
+        )?;
+        if inserted == 0 {
+            return Err(StorageError::DuplicateReuseDecision(decision.id.clone()));
+        }
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('evidence-reuse-authorized', ?1, ?2, 'not-authorized', 'authorized', ?3, NULL, ?4)",
+            params![
+                decision.actor,
+                decision.decided_at_unix_ms,
+                format!("{},{},{}", decision.id.as_str(), decision.source.id(), decision.target.id()),
+                format!("kind:{};rationale:{}", decision.evidence_kind.as_str(), decision.rationale),
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Returns the explicit reuse authorizations that target one exact target.
+    ///
+    /// # Errors
+    /// Returns an error for a missing target or malformed persisted decision.
+    pub fn reuse_decisions_for(
+        &self,
+        evidence_kind: ReuseEvidenceKind,
+        target: &Target,
+    ) -> Result<Vec<ReuseDecision>, StorageError> {
+        ensure_target_exists(&self.connection, target)?;
+        let mut statement = self.connection.prepare(
+            "SELECT reuse_decision_id, source_target_kind, source_target_id, actor, decided_at_unix_ms, rationale
+             FROM reuse_decisions WHERE evidence_kind = ?1 AND target_kind = ?2 AND target_id = ?3
+             ORDER BY decided_at_unix_ms, reuse_decision_id",
+        )?;
+        let rows = statement.query_map(
+            params![evidence_kind.as_str(), target.kind(), target.id()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )?;
+        rows.map(|row| {
+            let (id, source_kind, source_id, actor, decided_at_unix_ms, rationale) = row?;
+            ReuseDecision::new(
+                ReuseDecisionId::new(id)?,
+                evidence_kind,
+                target_from_storage(&source_kind, source_id)?,
+                target.clone(),
+                actor,
+                decided_at_unix_ms,
+                rationale,
+            )
+        })
+        .collect()
+    }
+
     /// Returns validation statuses recorded against one exact immutable target.
     /// # Errors
     /// Returns an error for a missing target or malformed persisted status.
@@ -2677,6 +2848,7 @@ pub enum StorageError {
     DuplicateReviewRequest(ReviewRequestId),
     DuplicateReviewSubmission(ReviewSubmissionId),
     DuplicateValidationResult(ValidationResultId),
+    DuplicateReuseDecision(ReuseDecisionId),
     DuplicateOperation(OperationId),
     DuplicateIntegration(IntegrationId),
     OperationReuseMismatch(OperationId),
@@ -2779,6 +2951,9 @@ impl Display for StorageError {
             }
             Self::DuplicateValidationResult(id) => {
                 write!(formatter, "duplicate validation result: {}", id.as_str())
+            }
+            Self::DuplicateReuseDecision(id) => {
+                write!(formatter, "duplicate reuse decision: {}", id.as_str())
             }
             Self::DuplicateOperation(id) => {
                 write!(formatter, "duplicate operation: {}", id.as_str())
@@ -2997,6 +3172,14 @@ fn ensure_target_exists(connection: &Connection, target: &Target) -> Result<(), 
                 Err(StorageError::MissingCandidate(id.clone()))
             }
         }
+    }
+}
+
+fn target_from_storage(kind: &str, id: String) -> Result<Target, StorageError> {
+    match kind {
+        "revision" => Ok(Target::Revision(RevisionId::new(id)?)),
+        "candidate" => Ok(Target::Candidate(CandidateId::new(id)?)),
+        _ => Err(StorageError::Invariant("unknown target kind")),
     }
 }
 
@@ -3974,6 +4157,54 @@ mod tests {
             repository.review_submissions_for(&ReviewRequestId::new("missing").unwrap()),
             Err(StorageError::MissingReviewRequest(_))
         ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn records_explicit_exact_target_reuse_decisions() {
+        let root = temporary_directory();
+        let database = root.join("weft.sqlite");
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let artifact = artifact(&store);
+        let change = ChangeId::new("change-1").unwrap();
+        let first = RevisionId::new("revision-1").unwrap();
+        let second = RevisionId::new("revision-2").unwrap();
+        let decision = ReuseDecision::new(
+            ReuseDecisionId::new("reuse-1").unwrap(),
+            ReuseEvidenceKind::Review,
+            Target::Revision(first.clone()),
+            Target::Revision(second.clone()),
+            "review-lead",
+            200,
+            "no changed review surface",
+        )
+        .unwrap();
+        {
+            let mut repository = SqliteRepository::open(&database, store.clone()).unwrap();
+            repository.create_change(change.clone()).unwrap();
+            repository
+                .append_revision(&change, None, first.clone(), &artifact)
+                .unwrap();
+            repository
+                .append_revision(&change, Some(&first), second.clone(), &artifact)
+                .unwrap();
+            repository.record_reuse_decision(&decision).unwrap();
+            assert_eq!(
+                domain_event_kinds(&repository.connection),
+                vec!["evidence-reuse-authorized"]
+            );
+            assert!(matches!(
+                repository.record_reuse_decision(&decision),
+                Err(StorageError::DuplicateReuseDecision(_))
+            ));
+        }
+        let repository = SqliteRepository::open(&database, store).unwrap();
+        assert_eq!(
+            repository
+                .reuse_decisions_for(ReuseEvidenceKind::Review, &Target::Revision(second))
+                .unwrap(),
+            vec![decision]
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

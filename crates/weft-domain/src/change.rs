@@ -48,6 +48,7 @@ domain_id!(WorkspaceId);
 domain_id!(ReviewRequestId);
 domain_id!(ReviewSubmissionId);
 domain_id!(ValidationResultId);
+domain_id!(ReuseDecisionId);
 domain_id!(IntegrationId);
 domain_id!(OperationId);
 domain_id!(IntegrationReceiptId);
