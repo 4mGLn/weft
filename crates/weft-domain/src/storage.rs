@@ -5,7 +5,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
@@ -240,6 +240,17 @@ impl AuditContext {
             actor: valid_event_value(actor.into(), "audit actor")?,
             occurred_at_unix_ms,
         })
+    }
+
+    fn local() -> Self {
+        Self {
+            actor: "weft-local-client".to_owned(),
+            occurred_at_unix_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |duration| {
+                    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
+                }),
+        }
     }
 }
 
@@ -1355,6 +1366,7 @@ impl SqliteRepository {
     ///
     /// Returns an error if the Change identity already exists or `SQLite` fails.
     pub fn create_change(&mut self, change_id: ChangeId) -> Result<(), StorageError> {
+        let audit = AuditContext::local();
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -1368,6 +1380,10 @@ impl SqliteRepository {
         transaction.execute(
             "INSERT INTO audit_events(change_id, kind, detail) VALUES (?1, ?2, ?3)",
             params![change_id.as_str(), "change-created", change_id.as_str()],
+        )?;
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('change-created', ?1, ?2, 'absent', 'created', ?3, NULL, NULL)",
+            params![audit.actor, audit.occurred_at_unix_ms, change_id.as_str()],
         )?;
         transaction.commit()?;
         Ok(())
@@ -1413,6 +1429,7 @@ impl SqliteRepository {
         revision_id: RevisionId,
         artifact: &CanonicalArtifact,
     ) -> Result<(), StorageError> {
+        let audit = AuditContext::local();
         self.content_store.put_artifact(artifact)?;
         let transaction = self
             .connection
@@ -1475,6 +1492,17 @@ impl SqliteRepository {
                 change_id.as_str(),
                 "revision-appended",
                 revision_id.as_str()
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('revision-appended', ?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+            params![
+                audit.actor,
+                audit.occurred_at_unix_ms,
+                expected.unwrap_or("no-head"),
+                revision_id.as_str(),
+                format!("{},{}", change_id.as_str(), revision_id.as_str()),
+                format!("artifact:{}", artifact.digest()),
             ],
         )?;
         transaction.commit()?;
@@ -3649,7 +3677,11 @@ mod tests {
 
     fn domain_event_kinds(connection: &Connection) -> Vec<String> {
         let mut statement = connection
-            .prepare("SELECT kind FROM domain_events ORDER BY event_id")
+            .prepare(
+                "SELECT kind FROM domain_events
+                 WHERE kind NOT IN ('change-created', 'revision-appended')
+                 ORDER BY event_id",
+            )
             .unwrap();
         statement
             .query_map([], |row| row.get::<_, String>(0))
