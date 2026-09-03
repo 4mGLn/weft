@@ -12,6 +12,11 @@ pub struct GitButlerRepository {
     root: PathBuf,
     repository_id: RepositoryId,
 }
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GitButlerStatus {
+    pub merge_base: String,
+    pub target: String,
+}
 impl GitButlerRepository {
     /// Discovers a supported `GitButler` workspace.
     ///
@@ -45,6 +50,33 @@ impl GitButlerRepository {
     pub fn root(&self) -> &Path {
         &self.root
     }
+    /// Reads the required target fields from the version-gated status schema.
+    /// # Errors
+    /// Returns an error for a CLI failure or unsupported status shape.
+    pub fn status(&self) -> Result<GitButlerStatus, GitButlerError> {
+        let raw = run("but", &self.root, ["--json", "status"])?;
+        Ok(GitButlerStatus {
+            merge_base: json_string_after(&raw, "mergeBase", "commitId")?,
+            target: json_string_after(&raw, "latestCommit", "commitId")?,
+        })
+    }
+}
+fn json_string_after(raw: &str, anchor: &str, key: &str) -> Result<String, GitButlerError> {
+    let start = raw.find(anchor).ok_or(GitButlerError::MalformedOutput)?;
+    let field = raw[start..]
+        .find(key)
+        .ok_or(GitButlerError::MalformedOutput)?
+        + start
+        + key.len();
+    let value = raw[field..]
+        .split_once('"')
+        .and_then(|(_, tail)| tail.split_once('"'))
+        .map(|(value, _)| value.to_owned())
+        .ok_or(GitButlerError::MalformedOutput)?;
+    if value.is_empty() {
+        return Err(GitButlerError::MalformedOutput);
+    }
+    Ok(value)
 }
 fn run<const N: usize>(
     program: &str,
