@@ -5,9 +5,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use weft_domain::{
     Assignment, AssignmentId, AuditContext, CandidateId, CandidateInput, ChangeId, ContentStore,
-    Dependency, MaterializationId, MaterializationState, ReviewOutcome, ReviewRequest,
-    ReviewRequestId, ReviewSubmission, ReviewSubmissionId, RevisionId, SqliteRepository, StackId,
-    Target, ValidationResult, ValidationResultId, ValidationStatus, WorkspaceId,
+    Dependency, IntegrationAttempt, IntegrationId, MaterializationId, MaterializationState,
+    OperationId, RepositoryId, ReviewOutcome, ReviewRequest, ReviewRequestId, ReviewSubmission,
+    ReviewSubmissionId, RevisionId, SqliteRepository, StackId, Target, ValidationResult,
+    ValidationResultId, ValidationStatus, WorkspaceId,
 };
 use weft_native_git::NativeGitRepository;
 
@@ -62,6 +63,7 @@ impl CliError {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
     let state = take_option(&mut arguments, "--state")
         .map_or_else(|| PathBuf::from(".weft"), PathBuf::from);
@@ -130,6 +132,11 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
         arguments.drain(0..2);
         return submit_review(&mut repository, &id, &mut arguments);
     }
+    if arguments.len() >= 3 && arguments[0] == "integrate" && arguments[1] == "plan" {
+        let id = arguments.remove(2);
+        arguments.drain(0..2);
+        return plan_integration(&mut repository, &id, &mut arguments);
+    }
     match arguments.as_slice() {
         [command] if command == "status" => Ok(format!(
             "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"status\",\"stateDirectory\":\"{}\"}}",
@@ -162,6 +169,47 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
             "expected `status`, `change create <id>`, or `change show <id>`",
         )),
     }
+}
+
+fn plan_integration(
+    repository: &mut SqliteRepository,
+    id: &str,
+    arguments: &mut Vec<String>,
+) -> Result<String, CliError> {
+    let candidate = required_option(arguments, "--candidate")?;
+    let repository_id = required_option(arguments, "--repository-id")?;
+    let target_ref = required_option(arguments, "--target-ref")?;
+    let expected_target = required_option(arguments, "--expected-target")?;
+    let provider = required_option(arguments, "--provider")?;
+    let strategy = required_option(arguments, "--strategy")?;
+    let operation = required_option(arguments, "--operation-id")?;
+    let actor = required_option(arguments, "--actor")?;
+    let at = required_i64(arguments, "--at")?;
+    if !arguments.is_empty() {
+        return Err(CliError::usage("unexpected integrate plan arguments"));
+    }
+    let attempt = IntegrationAttempt::new(
+        IntegrationId::new(id).map_err(|error| CliError::usage(error.to_string()))?,
+        RepositoryId::new(repository_id).map_err(|error| CliError::usage(error.to_string()))?,
+        CandidateId::new(candidate).map_err(|error| CliError::usage(error.to_string()))?,
+        target_ref,
+        expected_target,
+        provider,
+        strategy,
+        OperationId::new(operation).map_err(|error| CliError::usage(error.to_string()))?,
+        actor.clone(),
+    )
+    .map_err(|error| CliError::usage(error.to_string()))?;
+    let audit = AuditContext::new(actor, at).map_err(|error| CliError::usage(error.to_string()))?;
+    let attempt = repository
+        .plan_integration(&attempt, &audit)
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    Ok(format!(
+        "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"integration\",\"integrationId\":\"{}\",\"candidateId\":\"{}\",\"state\":\"planned\",\"operationId\":\"{}\"}}",
+        escape(attempt.id().as_str()),
+        escape(attempt.candidate_id().as_str()),
+        escape(attempt.operation_id().as_str())
+    ))
 }
 
 fn request_review(
