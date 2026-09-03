@@ -3,7 +3,8 @@
 use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use weft_domain::{ChangeId, ContentStore, SqliteRepository};
+use weft_domain::{ChangeId, ContentStore, RevisionId, SqliteRepository};
+use weft_native_git::NativeGitRepository;
 
 const SCHEMA_VERSION: u8 = 1;
 
@@ -67,6 +68,11 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
         .map_err(|error| CliError::domain(error.to_string()))?;
     let mut repository = SqliteRepository::open(state.join("weft.sqlite"), store)
         .map_err(|error| CliError::domain(error.to_string()))?;
+    if arguments.len() >= 3 && arguments[0] == "change" && arguments[1] == "revise" {
+        let change = arguments.remove(2);
+        arguments.drain(0..2);
+        return revise(&mut repository, &change, &mut arguments);
+    }
     match arguments.as_slice() {
         [command] if command == "status" => Ok(format!(
             "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"status\",\"stateDirectory\":\"{}\"}}",
@@ -99,6 +105,46 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
             "expected `status`, `change create <id>`, or `change show <id>`",
         )),
     }
+}
+
+fn revise(
+    repository: &mut SqliteRepository,
+    change: &str,
+    arguments: &mut Vec<String>,
+) -> Result<String, CliError> {
+    let path = take_option(arguments, "--repository")
+        .ok_or_else(|| CliError::usage("change revise requires --repository <path>"))?;
+    let base = take_option(arguments, "--base")
+        .ok_or_else(|| CliError::usage("change revise requires --base <commit>"))?;
+    let revision = take_option(arguments, "--revision")
+        .ok_or_else(|| CliError::usage("change revise requires --revision <revision-id>"))?;
+    let expected = take_option(arguments, "--expected-head").ok_or_else(|| {
+        CliError::usage("change revise requires --expected-head <revision-id|none>")
+    })?;
+    if !arguments.is_empty() {
+        return Err(CliError::usage("unexpected change revise arguments"));
+    }
+    let change = ChangeId::new(change).map_err(|error| CliError::usage(error.to_string()))?;
+    let revision = RevisionId::new(revision).map_err(|error| CliError::usage(error.to_string()))?;
+    let expected = if expected == "none" {
+        None
+    } else {
+        Some(RevisionId::new(expected).map_err(|error| CliError::usage(error.to_string()))?)
+    };
+    let provider =
+        NativeGitRepository::discover(path).map_err(|error| CliError::domain(error.to_string()))?;
+    let artifact = provider
+        .capture_revision(&base, "HEAD", repository.content_store())
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    repository
+        .append_revision(&change, expected.as_ref(), revision.clone(), &artifact)
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    Ok(format!(
+        "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"revision\",\"changeId\":\"{}\",\"revisionId\":\"{}\",\"artifactDigest\":\"{}\"}}",
+        escape(change.as_str()),
+        escape(revision.as_str()),
+        escape(artifact.digest())
+    ))
 }
 
 fn take_flag(arguments: &mut Vec<String>, name: &str) -> bool {
