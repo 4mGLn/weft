@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 2 — Native Git provider.
+Phase 3 — GitButler provider.
 
 ## Completed
 
@@ -49,16 +49,16 @@ Phase 2 — Native Git provider.
   domain evidence, retrying an operation ID resumes its exact attempt, and a
   running integration survives restart for explicit reconciliation without
   duplicate effects.
+- Completed Phase 2 Native Git provider acceptance: discovery, canonical capture,
+  detached materialization, overlap detection, conservative composition, guarded
+  target CAS, durable receipts/conflicts, and restart-safe reconciliation are
+  proven through the reusable API.
 
 ## Next checkpoint
 
-Add Native Git crash-injection and divergent-resolution evidence, then complete
-the Phase 2 acceptance audit. Discovery, exact commit inspection, durable
-canonical capture, detached-worktree materialization, path overlap inspection,
-conservative ordered artifact composition, guarded target CAS, durable attempts,
-receipts, conflicts, and running-attempt reconciliation are complete and recorded
-in
-`docs/tasks/phase-2-native-git-canonical-artifacts.md`.
+Implement GitButler repository discovery and version-gated capability inspection,
+then map the Phase 0-supported virtual/parallel branch and stack behavior to
+the durable domain API.
 
 ## Known gaps
 
