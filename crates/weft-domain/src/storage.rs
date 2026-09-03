@@ -2477,6 +2477,7 @@ impl SqliteRepository {
     pub fn plan_integration(
         &mut self,
         attempt: &IntegrationAttempt,
+        audit: &AuditContext,
     ) -> Result<IntegrationAttempt, StorageError> {
         let existing: Option<IntegrationAttemptRow> = self.connection.query_row(
             "SELECT integration_id, repository_id, candidate_id, target_ref, expected_target_revision, provider, strategy, actor, state FROM integration_attempts WHERE operation_id = ?1",
@@ -2525,13 +2526,32 @@ impl SqliteRepository {
         if self.candidate_is_stale(&attempt.candidate_id)? {
             return Err(StorageError::StaleCandidate(attempt.candidate_id.clone()));
         }
-        let inserted = self.connection.execute(
+        if audit.actor != attempt.actor {
+            return Err(StorageError::Invariant(
+                "integration plan actor must match attempt actor",
+            ));
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let inserted = transaction.execute(
             "INSERT OR IGNORE INTO integration_attempts(integration_id, repository_id, candidate_id, target_ref, expected_target_revision, provider, strategy, operation_id, actor, state) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'planned')",
             params![attempt.id.as_str(), attempt.repository_id.as_str(), attempt.candidate_id.as_str(), attempt.target_ref, attempt.expected_target_revision, attempt.provider, attempt.strategy, attempt.operation_id.as_str(), attempt.actor],
         )?;
         if inserted == 0 {
             return Err(StorageError::DuplicateIntegration(attempt.id.clone()));
         }
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('integration-planned', ?1, ?2, 'unplanned', 'planned', ?3, ?4, ?5)",
+            params![
+                audit.actor,
+                audit.occurred_at_unix_ms,
+                format!("{},{}", attempt.id.as_str(), attempt.candidate_id.as_str()),
+                attempt.operation_id.as_str(),
+                format!("provider:{};strategy:{}", attempt.provider, attempt.strategy),
+            ],
+        )?;
+        transaction.commit()?;
         Ok(attempt.clone())
     }
 
@@ -3494,6 +3514,33 @@ mod tests {
                 "integration-1,candidate-1".to_owned(),
                 "operation-1".to_owned(),
                 "provider-observed-target:target-r1".to_owned(),
+            )
+        );
+    }
+
+    fn assert_integration_planned_event(connection: &Connection) {
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id FROM domain_events WHERE kind = 'integration-planned'",
+                    [],
+                    |row| Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                    )),
+                )
+                .unwrap(),
+            (
+                "agent-1".to_owned(),
+                99,
+                "unplanned".to_owned(),
+                "planned".to_owned(),
+                "integration-1,candidate-1".to_owned(),
+                "operation-1".to_owned(),
             )
         );
     }
@@ -4474,7 +4521,10 @@ mod tests {
                     vec![CandidateInput::new(change, revision)],
                 )
                 .unwrap();
-            repository.plan_integration(&attempt).unwrap();
+            repository
+                .plan_integration(&attempt, &AuditContext::new("agent-1", 99).unwrap())
+                .unwrap();
+            assert_integration_planned_event(&repository.connection);
             assert!(matches!(
                 repository.start_integration(&integration_id, "target-r2", 100),
                 Err(StorageError::StaleTarget { .. })
@@ -4563,7 +4613,9 @@ mod tests {
                 "agent-1",
             )
             .unwrap();
-            repository.plan_integration(&attempt).unwrap();
+            repository
+                .plan_integration(&attempt, &AuditContext::new("agent-1", 99).unwrap())
+                .unwrap();
             repository
                 .acquire_lease(&change, "integrate", "agent-1", 100, 200)
                 .unwrap();
@@ -4643,7 +4695,9 @@ mod tests {
             "agent-1",
         )
         .unwrap();
-        repository.plan_integration(&original).unwrap();
+        repository
+            .plan_integration(&original, &AuditContext::new("agent-1", 99).unwrap())
+            .unwrap();
         let mismatched = IntegrationAttempt::new(
             IntegrationId::new("integration-2").unwrap(),
             RepositoryId::new("repo-1").unwrap(),
@@ -4657,7 +4711,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            repository.plan_integration(&mismatched),
+            repository.plan_integration(&mismatched, &AuditContext::new("agent-1", 100).unwrap()),
             Err(StorageError::OperationReuseMismatch(_))
         ));
         fs::remove_dir_all(root).unwrap();
@@ -4698,7 +4752,9 @@ mod tests {
                 "agent-1",
             )
             .unwrap();
-            repository.plan_integration(&attempt).unwrap();
+            repository
+                .plan_integration(&attempt, &AuditContext::new("agent-1", 99).unwrap())
+                .unwrap();
             repository
                 .acquire_lease(&change, "integrate", "agent-1", 100, 200)
                 .unwrap();
@@ -4784,6 +4840,7 @@ mod tests {
                         "agent-1",
                     )
                     .unwrap(),
+                    &AuditContext::new("agent-1", 99).unwrap(),
                 )
                 .unwrap();
             repository
