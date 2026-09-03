@@ -92,6 +92,20 @@ impl GitButlerRepository {
         }
         Ok(result)
     }
+    /// Creates a virtual branch commit from the current workspace changes.
+    /// # Errors
+    /// Returns an error when the CLI fails or the resulting branch is absent.
+    pub fn commit_virtual_branch(
+        &self,
+        name: &str,
+        message: &str,
+    ) -> Result<GitButlerBranch, GitButlerError> {
+        run("but", &self.root, ["commit", "-b", name, "-m", message])?;
+        self.branches()?
+            .into_iter()
+            .find(|branch| branch.name == name)
+            .ok_or(GitButlerError::MalformedOutput)
+    }
 }
 fn json_string_after(raw: &str, anchor: &str, key: &str) -> Result<String, GitButlerError> {
     let start = raw.find(anchor).ok_or(GitButlerError::MalformedOutput)?;
