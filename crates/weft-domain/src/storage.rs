@@ -225,6 +225,24 @@ pub struct DomainEvent {
     provider_evidence: Option<String>,
 }
 
+/// Authenticated mutation metadata required for automatic domain evidence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuditContext {
+    actor: String,
+    occurred_at_unix_ms: i64,
+}
+impl AuditContext {
+    /// Creates validated actor and timestamp metadata for a domain mutation.
+    /// # Errors
+    /// Returns an error for invalid actor metadata.
+    pub fn new(actor: impl Into<String>, occurred_at_unix_ms: i64) -> Result<Self, StorageError> {
+        Ok(Self {
+            actor: valid_event_value(actor.into(), "audit actor")?,
+            occurred_at_unix_ms,
+        })
+    }
+}
+
 /// Durable evidence of a provider operation that could not combine exact inputs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IntegrationConflict {
@@ -2016,6 +2034,7 @@ impl SqliteRepository {
         workspace_id: WorkspaceId,
         provider: impl Into<String>,
         provider_ref: impl Into<String>,
+        audit: &AuditContext,
     ) -> Result<Materialization, StorageError> {
         let provider = valid_event_value(provider.into(), "provider")?;
         let provider_ref = valid_event_value(provider_ref.into(), "provider reference")?;
@@ -2045,6 +2064,15 @@ impl SqliteRepository {
                 change_id,
                 "materialization-created",
                 materialization_id.as_str()
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('materialization-created', ?1, ?2, 'absent', 'clean', ?3, NULL, ?4)",
+            params![
+                audit.actor,
+                audit.occurred_at_unix_ms,
+                format!("{},{}", materialization_id.as_str(), revision_id.as_str()),
+                format!("provider:{};ref:{}", provider, provider_ref),
             ],
         )?;
         transaction.commit()?;
@@ -2094,6 +2122,7 @@ impl SqliteRepository {
         materialization_id: &MaterializationId,
         expected: MaterializationState,
         next: MaterializationState,
+        audit: &AuditContext,
     ) -> Result<Materialization, StorageError> {
         if !expected.may_transition_to(next) {
             return Err(StorageError::InvalidMaterializationTransition { expected, next });
@@ -2131,6 +2160,17 @@ impl SqliteRepository {
                 change_id,
                 "materialization-transitioned",
                 format!("{}:{}", materialization_id.as_str(), next.as_str())
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO domain_events(kind, actor, occurred_at_unix_ms, expected_state, resulting_state, affected_ids, operation_id, provider_evidence) VALUES ('materialization-transitioned', ?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+            params![
+                audit.actor,
+                audit.occurred_at_unix_ms,
+                expected.as_str(),
+                next.as_str(),
+                format!("{},{}", materialization_id.as_str(), revision),
+                format!("provider:{};ref:{}", provider, provider_ref),
             ],
         )?;
         transaction.commit()?;
@@ -3953,6 +3993,7 @@ mod tests {
                         WorkspaceId::new("workspace-1").unwrap(),
                         "native-git",
                         "worktree:one",
+                        &AuditContext::new("agent-1", 101).unwrap(),
                     )
                     .unwrap()
                     .state(),
@@ -3963,6 +4004,7 @@ mod tests {
                     &materialization,
                     MaterializationState::Clean,
                     MaterializationState::Clean,
+                    &AuditContext::new("agent-1", 102).unwrap(),
                 ),
                 Err(StorageError::InvalidMaterializationTransition { .. })
             ));
@@ -3972,6 +4014,7 @@ mod tests {
                         &materialization,
                         MaterializationState::Clean,
                         MaterializationState::Dirty,
+                        &AuditContext::new("agent-1", 103).unwrap(),
                     )
                     .unwrap()
                     .state(),
@@ -3982,6 +4025,7 @@ mod tests {
                     &materialization,
                     MaterializationState::Clean,
                     MaterializationState::Released,
+                    &AuditContext::new("agent-1", 104).unwrap(),
                 ),
                 Err(StorageError::StaleMaterializationState { .. })
             ));
@@ -3997,6 +4041,44 @@ mod tests {
                 .unwrap()
                 .state(),
             MaterializationState::Dirty
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn audits_materialization_creation_and_transition() {
+        let root = temporary_directory();
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let artifact = artifact(&store);
+        let mut repository = SqliteRepository::open(root.join("weft.sqlite"), store).unwrap();
+        let change = ChangeId::new("change-1").unwrap();
+        let revision = RevisionId::new("revision-1").unwrap();
+        let materialization = MaterializationId::new("materialization-1").unwrap();
+        repository.create_change(change.clone()).unwrap();
+        repository
+            .append_revision(&change, None, revision.clone(), &artifact)
+            .unwrap();
+        repository
+            .create_materialization(
+                materialization.clone(),
+                revision,
+                WorkspaceId::new("workspace-1").unwrap(),
+                "native-git",
+                "worktree:one",
+                &AuditContext::new("agent-1", 100).unwrap(),
+            )
+            .unwrap();
+        repository
+            .transition_materialization(
+                &materialization,
+                MaterializationState::Clean,
+                MaterializationState::Suspended,
+                &AuditContext::new("agent-1", 101).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            domain_event_kinds(&repository.connection),
+            vec!["materialization-created", "materialization-transitioned"]
         );
         fs::remove_dir_all(root).unwrap();
     }
