@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 4 — CLI.
+Phase 5 — Agent protocol.
 
 ## Completed
 
@@ -66,12 +66,15 @@ Phase 4 — CLI.
   workspace proves canonical export, leased whole-stack landing, a verified
   durable receipt, and SQLite restart recovery. Unverified landing remains an
   explicit reconciliation requirement rather than a success claim.
+- Completed Phase 4 CLI acceptance: schema-v1 noninteractive commands now cover
+  the durable domain lifecycle and the complete Native Git plan/run/reconcile
+  path, with explicit confirmations, operation IDs, exact targets, and stable
+  JSON/exit-code compatibility evidence.
 
 ## Next checkpoint
 
-Define the stable CLI command surface and JSON schemas, then expose the durable
-Change/revision lifecycle through noninteractive commands with explicit expected
-versions and operation IDs.
+Publish the provider-neutral agent operation protocol and prove a terminated
+session can resume exact canonical revision work from durable state.
 
 ## Known gaps
 
