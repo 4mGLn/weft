@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use weft_domain::{
     Assignment, AssignmentId, AuditContext, CandidateId, CandidateInput, ChangeId, ContentStore,
-    Dependency, MaterializationId, MaterializationState, RevisionId, SqliteRepository, StackId,
+    Dependency, MaterializationId, MaterializationState, ReviewOutcome, ReviewRequest,
+    ReviewRequestId, ReviewSubmission, ReviewSubmissionId, RevisionId, SqliteRepository, StackId,
     Target, ValidationResult, ValidationResultId, ValidationStatus, WorkspaceId,
 };
 use weft_native_git::NativeGitRepository;
@@ -119,6 +120,16 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
         arguments.drain(0..2);
         return record_validation(&mut repository, &id, &mut arguments);
     }
+    if arguments.len() >= 3 && arguments[0] == "review" && arguments[1] == "request" {
+        let id = arguments.remove(2);
+        arguments.drain(0..2);
+        return request_review(&mut repository, &id, &mut arguments);
+    }
+    if arguments.len() >= 3 && arguments[0] == "review" && arguments[1] == "submit" {
+        let id = arguments.remove(2);
+        arguments.drain(0..2);
+        return submit_review(&mut repository, &id, &mut arguments);
+    }
     match arguments.as_slice() {
         [command] if command == "status" => Ok(format!(
             "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"status\",\"stateDirectory\":\"{}\"}}",
@@ -150,6 +161,84 @@ fn execute(mut arguments: Vec<String>) -> Result<String, CliError> {
         _ => Err(CliError::usage(
             "expected `status`, `change create <id>`, or `change show <id>`",
         )),
+    }
+}
+
+fn request_review(
+    repository: &mut SqliteRepository,
+    id: &str,
+    arguments: &mut Vec<String>,
+) -> Result<String, CliError> {
+    let target = parse_target(&required_option(arguments, "--target")?)?;
+    let requester = required_option(arguments, "--requester")?;
+    let reviewers = required_option(arguments, "--reviewers")?;
+    let at = required_i64(arguments, "--at")?;
+    if !arguments.is_empty() {
+        return Err(CliError::usage("unexpected review request arguments"));
+    }
+    let request = ReviewRequest::new(
+        ReviewRequestId::new(id).map_err(|error| CliError::usage(error.to_string()))?,
+        target.clone(),
+        requester,
+        reviewers,
+        at,
+    )
+    .map_err(|error| CliError::usage(error.to_string()))?;
+    repository
+        .create_review_request(&request)
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    Ok(format!(
+        "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"reviewRequest\",\"reviewRequestId\":\"{}\",\"target\":\"{}\"}}",
+        escape(id),
+        escape(&target_name(&target))
+    ))
+}
+fn submit_review(
+    repository: &mut SqliteRepository,
+    id: &str,
+    arguments: &mut Vec<String>,
+) -> Result<String, CliError> {
+    let request = required_option(arguments, "--request")?;
+    let reviewer = required_option(arguments, "--reviewer")?;
+    let outcome = parse_review_outcome(&required_option(arguments, "--outcome")?)?;
+    let comments = required_option(arguments, "--comments")?;
+    let at = required_i64(arguments, "--at")?;
+    if !arguments.is_empty() {
+        return Err(CliError::usage("unexpected review submit arguments"));
+    }
+    let submission = ReviewSubmission::new(
+        ReviewSubmissionId::new(id).map_err(|error| CliError::usage(error.to_string()))?,
+        ReviewRequestId::new(request).map_err(|error| CliError::usage(error.to_string()))?,
+        reviewer,
+        outcome,
+        comments,
+        at,
+    )
+    .map_err(|error| CliError::usage(error.to_string()))?;
+    repository
+        .submit_review(&submission)
+        .map_err(|error| CliError::domain(error.to_string()))?;
+    Ok(format!(
+        "{{\"schemaVersion\":{SCHEMA_VERSION},\"kind\":\"reviewSubmission\",\"reviewSubmissionId\":\"{}\",\"outcome\":\"{}\"}}",
+        escape(id),
+        review_outcome_name(outcome)
+    ))
+}
+fn parse_review_outcome(value: &str) -> Result<ReviewOutcome, CliError> {
+    match value {
+        "approved" => Ok(ReviewOutcome::Approved),
+        "changes-requested" => Ok(ReviewOutcome::ChangesRequested),
+        "rejected" => Ok(ReviewOutcome::Rejected),
+        "blocked" => Ok(ReviewOutcome::Blocked),
+        _ => Err(CliError::usage("invalid review outcome")),
+    }
+}
+fn review_outcome_name(value: ReviewOutcome) -> &'static str {
+    match value {
+        ReviewOutcome::Approved => "approved",
+        ReviewOutcome::ChangesRequested => "changes-requested",
+        ReviewOutcome::Rejected => "rejected",
+        ReviewOutcome::Blocked => "blocked",
     }
 }
 
