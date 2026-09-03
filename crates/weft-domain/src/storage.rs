@@ -11,12 +11,12 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::artifact::{PathOperation, is_sha256_digest, sha256_digest};
 use crate::{
-    AssignmentId, BaseState, CandidateId, CanonicalArtifact, ChangeError, ChangeId, IntegrationId,
-    IntegrationReceiptId, MaterializationId, OperationId, RepositoryId, ReviewRequestId,
-    ReviewSubmissionId, RevisionId, StackId, ValidationResultId, WorkspaceId,
+    AssignmentId, BaseState, CandidateId, CanonicalArtifact, ChangeError, ChangeId, ConflictId,
+    IntegrationId, IntegrationReceiptId, MaterializationId, OperationId, RepositoryId,
+    ReviewRequestId, ReviewSubmissionId, RevisionId, StackId, ValidationResultId, WorkspaceId,
 };
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 static NEXT_TEMPORARY_OBJECT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
@@ -210,6 +210,54 @@ pub struct DomainEvent {
     affected_ids: String,
     operation_id: Option<String>,
     provider_evidence: Option<String>,
+}
+
+/// Durable evidence of a provider operation that could not combine exact inputs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IntegrationConflict {
+    id: ConflictId,
+    integration_id: IntegrationId,
+    candidate_id: CandidateId,
+    provider_state: String,
+    attempted_operation: String,
+    resolver: Option<String>,
+    resulting_target: Option<String>,
+    validation_evidence: Option<String>,
+}
+impl IntegrationConflict {
+    /// # Errors
+    /// Returns an error for invalid conflict metadata.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: ConflictId,
+        integration_id: IntegrationId,
+        candidate_id: CandidateId,
+        provider_state: impl Into<String>,
+        attempted_operation: impl Into<String>,
+        resolver: Option<String>,
+        resulting_target: Option<String>,
+        validation_evidence: Option<String>,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            id,
+            integration_id,
+            candidate_id,
+            provider_state: valid_event_value(provider_state.into(), "provider state")?,
+            attempted_operation: valid_event_value(
+                attempted_operation.into(),
+                "attempted operation",
+            )?,
+            resolver: resolver
+                .map(|value| valid_event_value(value, "resolver"))
+                .transpose()?,
+            resulting_target: resulting_target
+                .map(|value| valid_event_value(value, "resulting target"))
+                .transpose()?,
+            validation_evidence: validation_evidence
+                .map(|value| valid_event_value(value, "validation evidence"))
+                .transpose()?,
+        })
+    }
 }
 impl DomainEvent {
     /// # Errors
@@ -909,6 +957,13 @@ impl SqliteRepository {
                  kind TEXT NOT NULL, actor TEXT NOT NULL, occurred_at_unix_ms INTEGER NOT NULL,
                  expected_state TEXT NOT NULL, resulting_state TEXT NOT NULL, affected_ids TEXT NOT NULL,
                  operation_id TEXT NULL, provider_evidence TEXT NULL
+             );
+             CREATE TABLE IF NOT EXISTS integration_conflicts (
+                 conflict_id TEXT PRIMARY KEY NOT NULL,
+                 integration_id TEXT NOT NULL REFERENCES integration_attempts(integration_id) ON DELETE RESTRICT,
+                 candidate_id TEXT NOT NULL REFERENCES candidates(candidate_id) ON DELETE RESTRICT,
+                 provider_state TEXT NOT NULL, attempted_operation TEXT NOT NULL,
+                 resolver TEXT NULL, resulting_target TEXT NULL, validation_evidence TEXT NULL
              );
              CREATE TABLE IF NOT EXISTS dependencies (
                  upstream_change_id TEXT NOT NULL REFERENCES changes(change_id) ON DELETE RESTRICT,
@@ -1976,6 +2031,34 @@ impl SqliteRepository {
         event.event_id = self.connection.last_insert_rowid();
         Ok(())
     }
+
+    /// Records immutable provider conflict evidence and moves a running attempt to conflicted.
+    /// # Errors
+    /// Returns an error for missing/mismatched attempts or non-running state.
+    pub fn record_integration_conflict(
+        &mut self,
+        conflict: &IntegrationConflict,
+    ) -> Result<(), StorageError> {
+        let row: Option<(String, String)> = self
+            .connection
+            .query_row(
+                "SELECT candidate_id, state FROM integration_attempts WHERE integration_id = ?1",
+                [conflict.integration_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let (candidate, state) =
+            row.ok_or_else(|| StorageError::MissingIntegration(conflict.integration_id.clone()))?;
+        if candidate != conflict.candidate_id.as_str() {
+            return Err(StorageError::ConflictCandidateMismatch);
+        }
+        if IntegrationState::parse(&state)? != IntegrationState::Running {
+            return Err(StorageError::InvalidIntegrationTransition);
+        }
+        self.connection.execute("INSERT INTO integration_conflicts(conflict_id, integration_id, candidate_id, provider_state, attempted_operation, resolver, resulting_target, validation_evidence) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", params![conflict.id.as_str(), conflict.integration_id.as_str(), conflict.candidate_id.as_str(), conflict.provider_state, conflict.attempted_operation, conflict.resolver, conflict.resulting_target, conflict.validation_evidence])?;
+        self.connection.execute("UPDATE integration_attempts SET state = 'conflicted' WHERE integration_id = ?1 AND state = 'running'", [conflict.integration_id.as_str()])?;
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -2020,6 +2103,7 @@ pub enum StorageError {
     },
     EmptyStack,
     DuplicateStackEntry,
+    ConflictCandidateMismatch,
     StaleStackVersion {
         expected: i64,
         actual: i64,
@@ -2140,6 +2224,9 @@ impl Display for StorageError {
             ),
             Self::EmptyStack => formatter.write_str("stack requires at least one change"),
             Self::DuplicateStackEntry => formatter.write_str("stack contains a duplicate change"),
+            Self::ConflictCandidateMismatch => {
+                formatter.write_str("conflict candidate does not match integration")
+            }
             Self::StaleStackVersion { expected, actual } => write!(
                 formatter,
                 "stale stack version: expected {expected}, actual {actual}"
@@ -3147,6 +3234,90 @@ mod tests {
             repository
                 .connection
                 .query_row("SELECT COUNT(*) FROM integration_receipts", [], |row| row
+                    .get::<_, i64>(
+                    0
+                ))
+                .unwrap(),
+            1
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn persists_exact_integration_conflict_evidence() {
+        let root = temporary_directory();
+        let database = root.join("weft.sqlite");
+        let store = ContentStore::open(root.join("cas")).unwrap();
+        let artifact = artifact(&store);
+        let change = ChangeId::new("change-1").unwrap();
+        let revision = RevisionId::new("revision-1").unwrap();
+        let candidate = CandidateId::new("candidate-1").unwrap();
+        let integration = IntegrationId::new("integration-1").unwrap();
+        {
+            let mut repository = SqliteRepository::open(&database, store.clone()).unwrap();
+            repository.create_change(change.clone()).unwrap();
+            repository
+                .append_revision(&change, None, revision.clone(), &artifact)
+                .unwrap();
+            repository
+                .create_candidate(
+                    candidate.clone(),
+                    artifact.base().clone(),
+                    vec![CandidateInput::new(change.clone(), revision)],
+                )
+                .unwrap();
+            let attempt = IntegrationAttempt::new(
+                integration.clone(),
+                RepositoryId::new("repo-1").unwrap(),
+                candidate.clone(),
+                "main",
+                "target-r1",
+                "native-git",
+                "merge",
+                OperationId::new("operation-1").unwrap(),
+                "agent-1",
+            )
+            .unwrap();
+            repository.plan_integration(&attempt).unwrap();
+            repository
+                .acquire_lease(&change, "integrate", "agent-1", 100, 200)
+                .unwrap();
+            repository
+                .start_integration(&integration, "target-r1", 100)
+                .unwrap();
+            let conflict = IntegrationConflict::new(
+                ConflictId::new("conflict-1").unwrap(),
+                integration.clone(),
+                candidate.clone(),
+                "merge conflict",
+                "merge",
+                Some("resolver-1".to_owned()),
+                None,
+                Some("tests pending".to_owned()),
+            )
+            .unwrap();
+            repository.record_integration_conflict(&conflict).unwrap();
+            assert!(matches!(
+                repository.record_integration_conflict(&conflict),
+                Err(StorageError::InvalidIntegrationTransition)
+            ));
+        }
+        let repository = SqliteRepository::open(&database, store).unwrap();
+        assert_eq!(
+            repository
+                .connection
+                .query_row(
+                    "SELECT state FROM integration_attempts WHERE integration_id = ?1",
+                    [integration.as_str()],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            "conflicted"
+        );
+        assert_eq!(
+            repository
+                .connection
+                .query_row("SELECT COUNT(*) FROM integration_conflicts", [], |row| row
                     .get::<_, i64>(
                     0
                 ))
