@@ -19,6 +19,8 @@ subprocesses and provider JSON remain outside this crate's public domain types.
 
 The stable `make check` gate explicitly tests the active Rust host target so a developer's global cross-compilation default cannot silently change local verification. Cross-target builds will become separate release-matrix gates after packaging is decided.
 
+The current local CLI contract is documented in [CLI v1](CLI.md).
+
 ## Work lifecycle
 
 1. Define a measurable outcome and acceptance criteria.
