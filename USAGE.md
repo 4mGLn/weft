@@ -19,3 +19,13 @@ Exit code `0` means success. `1` is a local error, `2` usage, `3` not found,
 `4` concurrency conflict, `5` unsupported capability, `6` provider error, and
 `7` integrity failure. A provider mutation with an uncertain result must be
 reconciled; do not retry it blindly.
+
+## Windows
+
+Windows has no supported prebuilt runtime yet. Install Rust and Git, then build
+from source in PowerShell:
+
+```powershell
+cargo install --git https://github.com/4mGLn/weft.git --package weft-cli
+weft --help
+```

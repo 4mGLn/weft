@@ -8,7 +8,7 @@ fi
 
 version=$1
 output_dir=${2:-dist}
-target=${WEFT_RELEASE_TARGET:-x86_64-unknown-linux-gnu}
+target=${WEFT_RELEASE_TARGET:-x86_64-unknown-linux-musl}
 build_root=${CARGO_TARGET_DIR:-target}
 
 if ! printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -17,11 +17,13 @@ if ! printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
 fi
 
 case "$target" in
-    x86_64-unknown-linux-gnu) ;;
+    x86_64-unknown-linux-musl|x86_64-apple-darwin|aarch64-apple-darwin) ;;
     *) echo "unsupported release target: $target" >&2; exit 2 ;;
 esac
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+. "$script_dir/hash-utils.sh"
 package="weft-${version#v}-${target}"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT HUP INT TERM
@@ -45,13 +47,13 @@ archive="$output_dir/$package.tar.gz"
 sbom="$output_dir/$package.cdx.json"
 ./scripts/generate-sbom.py "$sbom"
 install -m 0644 "$sbom" "$stage/$package/SBOM.cdx.json"
-(cd "$stage/$package" && find . -type f ! -name MANIFEST.sha256 -print0 | sort -z | xargs -0 sha256sum > MANIFEST.sha256)
-tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='UTC 2026-01-01' -C "$stage" -czf "$archive" "$package"
+write_manifest "$stage/$package" "$stage/$package/MANIFEST.sha256"
+python3 "$script_dir/create-deterministic-archive.py" "$stage" "$package" "$archive"
 archive_name=$(basename "$archive")
 sbom_name=$(basename "$sbom")
 (
     cd "$output_dir"
-    sha256sum "$archive_name" > "$archive_name.sha256"
-    sha256sum "$sbom_name" > "$sbom_name.sha256"
+    printf '%s  %s\n' "$(sha256_digest "$archive_name")" "$archive_name" > "$archive_name.sha256"
+    printf '%s  %s\n' "$(sha256_digest "$sbom_name")" "$sbom_name" > "$sbom_name.sha256"
 )
 printf '%s\n' "$archive"
