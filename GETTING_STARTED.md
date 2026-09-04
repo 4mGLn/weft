@@ -3,7 +3,7 @@
 1. Install the latest supported Linux or macOS release:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/4mGLn/weft/main/packaging/install-release.sh | sh
+   curl -fsSL https://raw.githubusercontent.com/4mGLn/weft/main/install.sh | sh
    ```
 
    Set `WEFT_VERSION=vMAJOR.MINOR.PATCH` before the command to select an exact
