@@ -1,0 +1,23 @@
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.tmp
+*.log
+
+# Local agent/runtime state; canonical ledgers remain tracked.
+.omc/
+.omx/
+.playwright-cli/
+.tmp/
+tmp/
+
+# Future build outputs and local secrets.
+build/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+*.pem
+*.key

@@ -1,0 +1,32 @@
+name: Specification release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify release input
+        run: make check
+      - name: Build specification bundle
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          tar -czf "weft-spec-${VERSION}.tar.gz" \
+            README.md GOAL.md DOMAIN.md ROADMAP.md AGENTS.md \
+            CONTRIBUTING.md SECURITY.md CHANGELOG.md \
+            docs .agent .agents
+          sha256sum "weft-spec-${VERSION}.tar.gz" > "weft-spec-${VERSION}.sha256"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: gh release create "$VERSION" "weft-spec-${VERSION}.tar.gz" "weft-spec-${VERSION}.sha256" --verify-tag --generate-notes
