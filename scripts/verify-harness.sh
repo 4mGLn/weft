@@ -8,11 +8,11 @@ required=(
   README.md AGENTS.md CONTRIBUTING.md SECURITY.md
   docs/GOAL.md docs/DOMAIN.md docs/ROADMAP.md docs/CHANGELOG.md
   docs/DEVELOPMENT.md docs/DEPLOYMENT.md
-  docs/agent-harness/README.md
-  docs/agent-harness/task-template.md
-  docs/agent-harness/verification-matrix.md
-  docs/decisions/README.md
-  .agent/PROGRESS.md .agent/DECISIONS.md
+  .agents/agent-harness/README.md
+  .agents/agent-harness/task-template.md
+  .agents/agent-harness/verification-matrix.md
+  .agents/decisions/README.md
+  .agents/PROGRESS.md .agents/DECISIONS.md
 )
 
 for path in "${required[@]}"; do
