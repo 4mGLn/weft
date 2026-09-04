@@ -26,9 +26,11 @@ Before upgrade, stop mutating callers and preserve the current binary plus the e
 
 Rollback the binary only when its documented schema range includes the opened database. Otherwise restore the pre-upgrade state-directory backup together with the old binary. Never mix a restored database with newer canonical-artifact contents. `uninstall.sh` removes only the binary; state is deliberately retained and must be deleted separately by an operator using an exact path.
 
+The `v0.1.0` archive-to-`v0.1.1` candidate checkpoint proves direct binary rollback while both runtimes use metadata schema 7: it creates durable state under `v0.1.0`, upgrades in place, writes and reads a candidate-era Change, restores the old binary and reads both Changes, then restores the complete pre-upgrade state snapshot. It does not claim rollback across a schema migration. A release that raises the schema must document its compatibility range and prove the backup-restore path before publication.
+
 ## Evidence and unsupported claims
 
-The archive smoke test proves checksum verification, clean installation, process restart, and uninstall retention. Repository tests prove provider divergence and partial-integration reconciliation. Upgrade/rollback against an earlier public runtime is unavailable until a prior runtime exists.
+The archive smoke test proves checksum verification, clean installation, process restart, and uninstall retention. The upgrade/rollback smoke test verifies checksums and SBOMs for both archives, in-place binary replacement, durable-state reads before and after rollback, and complete state-snapshot restoration. Main CI checks the fixed public `v0.1.0` baseline against the current candidate; a tagged release checks the latest prior GitHub runtime before publication. Repository tests prove provider divergence and partial-integration reconciliation.
 
 GitButler currently requires exactly `but 0.22.0`, a local SHA-1 repository, and a writable GitButler project registry. Its only mutating capability is repository-local `gb-local` fast-forward landing. Canonical import, remote landing, provider reconnect, credentials, remote policy enforcement, artifact signing, vulnerability scanning, additional platforms, package managers, auto-update, services, containers, and hosted deployment are not release claims.
 

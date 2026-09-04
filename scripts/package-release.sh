@@ -47,6 +47,11 @@ sbom="$output_dir/$package.cdx.json"
 install -m 0644 "$sbom" "$stage/$package/docs/SBOM.cdx.json"
 (cd "$stage/$package" && find . -type f ! -name MANIFEST.sha256 -print0 | sort -z | xargs -0 sha256sum > MANIFEST.sha256)
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='UTC 2026-01-01' -C "$stage" -czf "$archive" "$package"
-sha256sum "$archive" > "$archive.sha256"
-sha256sum "$sbom" > "$sbom.sha256"
+archive_name=$(basename "$archive")
+sbom_name=$(basename "$sbom")
+(
+    cd "$output_dir"
+    sha256sum "$archive_name" > "$archive_name.sha256"
+    sha256sum "$sbom_name" > "$sbom_name.sha256"
+)
 printf '%s\n' "$archive"

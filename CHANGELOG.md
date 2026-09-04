@@ -6,6 +6,12 @@ All notable project changes will be documented here.
 
 ### Added
 
+- Archive-to-archive `v0.1.0` to `v0.1.1` candidate upgrade/rollback proof with checksum/SBOM verification, durable-state compatibility, and complete pre-upgrade snapshot restoration.
+
+## 0.1.0 - 2026-08-27
+
+### Added
+
 - Product goal, normative domain model, and implementation roadmap.
 - Evidence-driven agent development harness and public repository automation.
 - Reproducible Native Git and GitButler Phase 0 provider spikes.
