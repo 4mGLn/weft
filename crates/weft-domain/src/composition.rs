@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Display, Formatter, Write as _};
 
 use sha2::{Digest, Sha256};
 
@@ -616,10 +616,12 @@ fn digest_candidate(
         encode_input(&mut bytes, requirement.downstream())?;
         encode_input(&mut bytes, requirement.upstream())?;
     }
-    Ok(CandidateDigest(format!(
-        "sha256:{:x}",
-        Sha256::digest(bytes)
-    )))
+    let digest = Sha256::digest(bytes);
+    let mut value = String::from("sha256:");
+    for byte in digest {
+        write!(&mut value, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    Ok(CandidateDigest(value))
 }
 
 fn encode_input(bytes: &mut Vec<u8>, input: &CandidateInput) -> Result<(), CompositionError> {
