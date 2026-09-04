@@ -15,3 +15,4 @@
 | Exact GitButler 0.22 local capability adapter | Accepted | `.agents/decisions/0011-gitbutler-0-22-local-adapter.md` |
 | Stable local CLI v1 contract | Accepted | `.agents/decisions/0012-stable-local-cli-v1.md` |
 | Provider-neutral agent protocol, Paseo boundary, and local runtime release | Accepted | `.agents/decisions/0013-agent-protocol-and-local-runtime-release.md` |
+| Stable latest-release Unix installer asset | Accepted | `.agents/decisions/0015-stable-latest-release-installer.md` |
