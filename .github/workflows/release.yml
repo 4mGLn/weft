@@ -59,11 +59,9 @@ jobs:
       - name: Attest runtime archive
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
-          subject-path: |
-            dist/weft-*.tar.gz
-            dist/weft-*.cdx.json
+          subject-path: dist/weft-*.tar.gz
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ github.ref_name }}
-        run: gh release create "$VERSION" dist/weft-* --verify-tag --generate-notes
+        run: gh release create "$VERSION" "dist/weft-${VERSION#v}-x86_64-unknown-linux-gnu.tar.gz" --verify-tag --generate-notes
