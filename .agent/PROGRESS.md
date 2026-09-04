@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 8 — local-runtime upgrade/rollback checkpoint ready for CI.
+Phase 8 — local-runtime upgrade/rollback checkpoint complete.
 
 ## Completed
 
@@ -195,8 +195,8 @@ Phase 8 — local-runtime upgrade/rollback checkpoint ready for CI.
 
 ## Next checkpoint
 
-Run the public `main` gate for the `v0.1.1` candidate, then retain the checkpoint
-for the next authorized runtime release.
+Retain the passing checkpoint for the next authorized `v0.1.1` runtime release;
+before a schema migration release, define and prove its compatibility boundary.
 
 ## Known gaps
 
