@@ -14,7 +14,7 @@ The reviewed EZIS repositories demonstrate complementary patterns: routing-map a
 Adopt those patterns as a Weft-specific harness rather than copying product- or language-specific rules:
 
 - `AGENTS.md` routes to canonical product, domain, roadmap, task, verification, decision, and deployment documents.
-- `.agent/` holds current evidence and a decision index; `docs/decisions/` holds durable ADRs.
+- `.agents/` holds agent state, durable ADRs, phase evidence, task records, and agent skills; user-facing operational documentation remains under `docs/`.
 - Material work starts with measurable acceptance and ends with evidence and residual risk.
 - Specialist reviewers are read-only and scoped to domain, provider, or release boundaries.
 - `make check` is the stable local and CI entry point.
