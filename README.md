@@ -6,13 +6,34 @@ It treats a Change—not a branch, worktree, commit, or agent session—as the d
 
 ## Project status
 
-Weft has completed the provider feasibility spike, provider-neutral domain and persistence kernel, Native Git adapter, GitButler adapter, stable local CLI, and provider-neutral agent protocol. The first deployable artifact is a local CLI archive built and smoke-tested on Ubuntu 24.04 x86_64. Hosted deployment remains out of scope.
+Weft has completed the provider feasibility spike, provider-neutral domain and persistence kernel, Native Git adapter, GitButler adapter, stable local CLI, and provider-neutral agent protocol. The first deployable artifact is a local CLI archive. Hosted deployment remains out of scope.
+
+## Install
+
+Linux x86_64 (portable musl build), macOS Intel, and macOS Apple Silicon:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/4mGLn/weft/main/install.sh | sh
+```
+
+Windows x86_64:
+
+```powershell
+irm https://raw.githubusercontent.com/4mGLn/weft/main/install.ps1 | iex
+```
+
+The installers download the latest matching GitHub Release asset and verify its
+published SHA-256 digest before installing. Set `WEFT_VERSION=vMAJOR.MINOR.PATCH`
+to select an exact release. Unix installations default to `$HOME/.local`; set
+`PREFIX` to override it. Windows installations default to `%LOCALAPPDATA%\\Weft`;
+set `WEFT_PREFIX` to override it. A platform is installable once its matching
+release asset is published.
 
 ## Start here
 
-- [Product goal](GOAL.md)
-- [Normative domain model](DOMAIN.md)
-- [Implementation roadmap](ROADMAP.md)
+- [Product goal](docs/GOAL.md)
+- [Normative domain model](docs/DOMAIN.md)
+- [Implementation roadmap](docs/ROADMAP.md)
 - [Development guide](docs/DEVELOPMENT.md)
 - [Deployment and release policy](docs/DEPLOYMENT.md)
 - [Agent protocol](docs/AGENT_PROTOCOL.md)
