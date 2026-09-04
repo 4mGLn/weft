@@ -1,4 +1,4 @@
-.PHONY: check docs-check harness-check rust-check phase0-spike phase0-native-git-spike phase0-gitbutler-spike phase3-gitbutler-live package-release test-release test-upgrade-rollback
+.PHONY: check docs-check harness-check rust-check phase0-spike phase0-native-git-spike phase0-gitbutler-spike phase3-gitbutler-live package-release test-release test-upgrade-rollback test-release-reproducibility
 
 RUST_HOST := $(shell rustc -vV | sed -n 's/^host: //p')
 
@@ -38,3 +38,7 @@ test-upgrade-rollback:
 	@test -n "$(FROM_ARCHIVE)" || (echo "FROM_ARCHIVE is required" >&2; exit 2)
 	@test -n "$(TO_ARCHIVE)" || (echo "TO_ARCHIVE is required" >&2; exit 2)
 	./scripts/test-upgrade-rollback.sh "$(FROM_ARCHIVE)" "$(TO_ARCHIVE)"
+
+test-release-reproducibility:
+	@test -n "$(VERSION)" || (echo "VERSION is required" >&2; exit 2)
+	./scripts/test-release-reproducibility.sh "$(VERSION)"

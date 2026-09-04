@@ -42,6 +42,7 @@ jobs:
         run: |
           make package-release VERSION="$VERSION"
           make test-release ARCHIVE="dist/weft-${VERSION#v}-x86_64-unknown-linux-gnu.tar.gz"
+          make test-release-reproducibility VERSION="$VERSION"
       - name: Verify upgrade and rollback from the latest prior runtime
         env:
           GH_TOKEN: ${{ github.token }}

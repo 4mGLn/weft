@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 8 — local-runtime upgrade/rollback checkpoint complete.
+Phase 8 — release reproducibility checkpoint ready for CI.
 
 ## Completed
 
@@ -192,11 +192,14 @@ Phase 8 — local-runtime upgrade/rollback checkpoint complete.
 - Added an archive-to-archive upgrade/rollback checkpoint from that public runtime
   to the unpublished `v0.1.1` candidate, including durable-state reads after direct
   rollback and complete pre-upgrade state-snapshot restoration.
+- Added a same-runner reproducibility checkpoint that builds the `v0.1.1`
+  candidate twice from independent target directories and compares the archive,
+  checksums, and SBOM byte-for-byte.
 
 ## Next checkpoint
 
-Retain the passing checkpoint for the next authorized `v0.1.1` runtime release;
-before a schema migration release, define and prove its compatibility boundary.
+Run the public `main` gate for release reproducibility, then retain both release
+checkpoints for the next authorized `v0.1.1` runtime release.
 
 ## Known gaps
 
