@@ -19,7 +19,7 @@ def main() -> int:
     root = Path(__file__).resolve().parents[1]
     metadata = json.loads(
         subprocess.check_output(
-            ["cargo", "metadata", "--locked", "--offline", "--format-version", "1"],
+            ["cargo", "metadata", "--locked", "--format-version", "1"],
             cwd=root,
             text=True,
         )
