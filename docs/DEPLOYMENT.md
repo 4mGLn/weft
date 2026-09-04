@@ -26,7 +26,7 @@ Before upgrade, stop mutating callers and preserve the current binary plus the e
 
 Rollback the binary only when its documented schema range includes the opened database. Otherwise restore the pre-upgrade state-directory backup together with the old binary. Never mix a restored database with newer canonical-artifact contents. `uninstall.sh` removes only the binary; state is deliberately retained and must be deleted separately by an operator using an exact path.
 
-The `v0.1.0` archive-to-`v0.1.1` candidate checkpoint proves direct binary rollback while both runtimes use metadata schema 7: it creates durable state under `v0.1.0`, upgrades in place, writes and reads a candidate-era Change, restores the old binary and reads both Changes, then restores the complete pre-upgrade state snapshot. It does not claim rollback across a schema migration. A release that raises the schema must document its compatibility range and prove the backup-restore path before publication.
+The `v0.1.0` archive-to-`v0.2.0` candidate checkpoint proves direct binary rollback while both runtimes use metadata schema 7: it creates durable state under `v0.1.0`, upgrades in place, writes and reads a candidate-era Change, restores the old binary and reads both Changes, then restores the complete pre-upgrade state snapshot. It does not claim rollback across a schema migration. A release that raises the schema must document its compatibility range and prove the backup-restore path before publication.
 
 ## Evidence and unsupported claims
 

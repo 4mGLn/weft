@@ -6,7 +6,7 @@ All notable project changes will be documented here.
 
 ### Added
 
-- Archive-to-archive `v0.1.0` to `v0.1.1` candidate upgrade/rollback proof with checksum/SBOM verification, durable-state compatibility, and complete pre-upgrade snapshot restoration.
+- Archive-to-archive `v0.1.0` to `v0.2.0` upgrade/rollback proof with checksum/SBOM verification, durable-state compatibility, and complete pre-upgrade snapshot restoration.
 
 ### Changed
 
