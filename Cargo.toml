@@ -1,0 +1,24 @@
+[workspace]
+members = [
+    "crates/weft-artifact",
+    "crates/weft-domain",
+    "crates/weft-provider-git",
+    "crates/weft-provider-gitbutler",
+    "crates/weft-storage-sqlite",
+    "crates/weft-cli",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+repository = "https://github.com/4mGLn/weft"
+rust-version = "1.97"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "deny"
+pedantic = "deny"

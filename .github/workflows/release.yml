@@ -1,32 +1,55 @@
-name: Specification release
+name: Runtime release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*.*.*"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 0
           persist-credentials: false
-      - name: Verify release input
+      - name: Verify tag identity
+        env:
+          TAG_SHA: ${{ github.sha }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "release tag must be vMAJOR.MINOR.PATCH" >&2
+            exit 2
+          fi
+          git fetch origin main
+          TAG_COMMIT="$(git rev-list -n 1 "$VERSION")"
+          test "$TAG_COMMIT" = "$TAG_SHA"
+          git merge-base --is-ancestor "$TAG_COMMIT" origin/main
+      - name: Verify repository
         run: make check
-      - name: Build specification bundle
+      - name: Build and test runtime archive
         env:
           VERSION: ${{ github.ref_name }}
         run: |
-          tar -czf "weft-spec-${VERSION}.tar.gz" \
-            README.md GOAL.md DOMAIN.md ROADMAP.md AGENTS.md \
-            CONTRIBUTING.md SECURITY.md CHANGELOG.md \
-            docs .agent .agents
-          sha256sum "weft-spec-${VERSION}.tar.gz" > "weft-spec-${VERSION}.sha256"
+          make package-release VERSION="$VERSION"
+          make test-release ARCHIVE="dist/weft-${VERSION#v}-x86_64-unknown-linux-gnu.tar.gz"
+      - name: Attest runtime archive
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            dist/weft-*.tar.gz
+            dist/weft-*.cdx.json
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ github.ref_name }}
-        run: gh release create "$VERSION" "weft-spec-${VERSION}.tar.gz" "weft-spec-${VERSION}.sha256" --verify-tag --generate-notes
+        run: gh release create "$VERSION" dist/weft-* --verify-tag --generate-notes

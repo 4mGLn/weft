@@ -8,6 +8,7 @@ Run the smallest check proving the changed behavior, then the mandatory boundary
 | Revision/canonical content | Capture/reconstruct equality | Provider state removed, digest mismatch, stale-head rejection |
 | Dependency/stack/candidate | Exact input snapshot | Cycle rejection, stale upstream, reorder/new-candidate behavior |
 | Assignment/lease | Acquire/release path | Competing writer, expiry/reclaim, crash recovery |
+| Materialization | Create/observe/release exact revision | Canonical content, provider evidence, stale writer, restart, projection/event drift |
 | Review/validation | Exact target result | New revision/candidate staleness and explicit reuse policy |
 | Native Git provider | Fixture-backed operation | Dirty/diverged state, changed target, conflict, retry/reconciliation |
 | GitButler provider | Declared-version fixture | Rewrite/reconnect, capability denial, conflict, external divergence |

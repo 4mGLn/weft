@@ -5,15 +5,25 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   repository-gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - name: Verify repository harness and documentation
         run: make check
+      - name: Verify Native Git feasibility contract
+        run: make phase0-native-git-spike
+      - name: Build and smoke-test deployable archive
+        run: |
+          make package-release VERSION=v0.1.0
+          make test-release ARCHIVE=dist/weft-0.1.0-x86_64-unknown-linux-gnu.tar.gz

@@ -28,3 +28,11 @@ Provider names, branches, commands, and successful happy paths do not prove iden
 - Remove obsolete instructions with the behavior that invalidates them.
 - Add a project skill only for a repeated workflow with deterministic inputs, outputs, and validation.
 - Keep historical task reports out of normative specifications.
+
+## Orchestrator boundary
+
+Agent runtimes use the provider-neutral process contract in
+[`docs/AGENT_PROTOCOL.md`](../AGENT_PROTOCOL.md). Orchestrators may launch,
+supervise, and notify, but durable work ownership and recovery always come from
+Weft state. Paseo-specific placement guidance lives in
+[`docs/PASEO.md`](../PASEO.md); it does not override the protocol.
