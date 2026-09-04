@@ -1,5 +1,5 @@
 use std::ffi::{OsStr, OsString};
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Arc;
@@ -46,8 +46,8 @@ where
         .into_iter()
         .map(|value| value.as_ref().to_os_string())
         .collect();
-    let mut child = spawn_git(git, directory, &args, input.is_some())?;
     let deadline = Instant::now() + policy.timeout;
+    let mut child = spawn_git(git, directory, &args, input.is_some(), deadline, operation)?;
 
     let stdout = child
         .stdout
@@ -163,6 +163,8 @@ fn spawn_git(
     directory: Option<&Path>,
     args: &[OsString],
     pipe_input: bool,
+    deadline: Instant,
+    operation: &'static str,
 ) -> Result<Child, GitProviderError> {
     let mut command = Command::new(git);
     command
@@ -182,7 +184,18 @@ fn spawn_git(
         command.current_dir(directory);
     }
     set_process_group(&mut command);
-    Ok(command.spawn()?)
+    loop {
+        match command.spawn() {
+            Ok(child) => return Ok(child),
+            Err(error) if error.kind() == ErrorKind::ExecutableFileBusy => {
+                if Instant::now() >= deadline {
+                    return Err(GitProviderError::CommandTimedOut { operation });
+                }
+                thread::sleep(POLL_INTERVAL);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
 }
 
 #[cfg(unix)]

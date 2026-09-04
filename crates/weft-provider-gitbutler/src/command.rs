@@ -1,5 +1,5 @@
 use std::ffi::{OsStr, OsString};
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Arc;
@@ -48,7 +48,8 @@ where
         .into_iter()
         .map(|value| value.as_ref().to_os_string())
         .collect();
-    let mut child = spawn(binary, directory, &args, environment)?;
+    let deadline = Instant::now() + policy.timeout;
+    let mut child = spawn(binary, directory, &args, environment, deadline, operation)?;
     #[cfg(test)]
     if policy.inject_post_spawn_failure && operation == "land-local-stack" {
         thread::sleep(Duration::from_millis(50));
@@ -58,7 +59,6 @@ where
             reason: "injected post-spawn collection failure".to_owned(),
         });
     }
-    let deadline = Instant::now() + policy.timeout;
     let stdout = child
         .stdout
         .take()
@@ -135,6 +135,8 @@ fn spawn(
     directory: Option<&Path>,
     args: &[OsString],
     environment: &[(OsString, OsString)],
+    deadline: Instant,
+    operation: &'static str,
 ) -> Result<Child, GitButlerProviderError> {
     let mut command = Command::new(binary);
     command
@@ -150,7 +152,18 @@ fn spawn(
         command.current_dir(directory);
     }
     set_process_group(&mut command);
-    Ok(command.spawn()?)
+    loop {
+        match command.spawn() {
+            Ok(child) => return Ok(child),
+            Err(error) if error.kind() == ErrorKind::ExecutableFileBusy => {
+                if Instant::now() >= deadline {
+                    return Err(GitButlerProviderError::CommandTimedOut { operation });
+                }
+                thread::sleep(POLL_INTERVAL);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
 }
 
 #[cfg(unix)]
