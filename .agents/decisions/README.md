@@ -20,3 +20,4 @@ Each ADR records status, context, decision, alternatives, consequences, migratio
 - [ADR-0012: Stable local CLI v1 contract](0012-stable-local-cli-v1.md)
 - [ADR-0013: Agent protocol and local runtime release](0013-agent-protocol-and-local-runtime-release.md)
 - [ADR-0014: Minimal runtime archive and release metadata](0014-minimal-runtime-archive-and-release-metadata.md)
+- [ADR-0015: Stable latest-release Unix installer asset](0015-stable-latest-release-installer.md)

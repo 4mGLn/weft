@@ -11,6 +11,7 @@ All notable project changes will be documented here.
 ### Changed
 
 - Runtime releases publish only the installable archive. The archive no longer ships project documentation or development helpers; its embedded root SBOM remains covered by CI and provenance verification.
+- Runtime releases also publish a stable-name Unix `install.sh` bootstrap asset, enabling the latest published release to be installed without executing a script from the development branch.
 
 ## 0.1.0 - 2026-08-27
 

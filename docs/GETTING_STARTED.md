@@ -3,12 +3,15 @@
 1. Install the latest supported Linux or macOS release:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/4mGLn/weft/main/install.sh | sh
+   curl -fsSL https://github.com/4mGLn/weft/releases/latest/download/install.sh | sh
    ```
 
-   Set `WEFT_VERSION=vMAJOR.MINOR.PATCH` before the command to select an exact
-   release, or `PREFIX=/path` to choose the installation prefix. The script
-   verifies GitHub's asset digest before installing.
+   This bootstrapper comes from the latest published release, not the
+   development branch. To select an exact release, use
+   `https://github.com/4mGLn/weft/releases/download/vMAJOR.MINOR.PATCH/install.sh`
+   and run it with `WEFT_VERSION=vMAJOR.MINOR.PATCH sh`. Set `PREFIX=/path` to
+   choose the installation prefix. The script verifies GitHub's asset digest
+   before installing.
 
 2. To install a downloaded archive manually:
 

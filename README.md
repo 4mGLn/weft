@@ -13,7 +13,7 @@ Weft has completed the provider feasibility spike, provider-neutral domain and p
 Linux x86_64 (portable musl build), macOS Intel, and macOS Apple Silicon:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/4mGLn/weft/main/install.sh | sh
+curl -fsSL https://github.com/4mGLn/weft/releases/latest/download/install.sh | sh
 ```
 
 Windows x86_64:
@@ -22,12 +22,15 @@ Windows x86_64:
 irm https://raw.githubusercontent.com/4mGLn/weft/main/install.ps1 | iex
 ```
 
-The installers download the latest matching GitHub Release asset and verify its
-published SHA-256 digest before installing. Set `WEFT_VERSION=vMAJOR.MINOR.PATCH`
-to select an exact release. Unix installations default to `$HOME/.local`; set
-`PREFIX` to override it. Windows installations default to `%LOCALAPPDATA%\\Weft`;
-set `WEFT_PREFIX` to override it. A platform is installable once its matching
-release asset is published.
+The Unix bootstrapper is downloaded from the latest published GitHub Release,
+then downloads the matching runtime archive and verifies its published SHA-256
+digest before installing. To select an exact release, use that release's
+`install.sh` asset and pass its version to `sh`, for example
+`curl -fsSL https://github.com/4mGLn/weft/releases/download/vMAJOR.MINOR.PATCH/install.sh | WEFT_VERSION=vMAJOR.MINOR.PATCH sh`.
+Unix installations default to `$HOME/.local`; set `PREFIX` to override it.
+Windows installations default to `%LOCALAPPDATA%\\Weft`; set `WEFT_PREFIX` to
+override it. A platform is installable once its matching release asset is
+published.
 
 ## Start here
 
