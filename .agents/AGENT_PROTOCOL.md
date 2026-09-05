@@ -6,7 +6,9 @@ Weft's provider-neutral agent API is the noninteractive `weft` process interface
 
 An orchestrator launches and supervises processes. Weft owns Change identity, revisions, canonical artifacts, assignments, leases, exact candidates, reviews, validations, integration attempts, receipts, and audit history. An agent session, branch, worktree, or provider change ID is replaceable evidence and never durable Change identity.
 
-Every invocation supplies an explicit state directory:
+Runtime adapters resolve their configured state directory from the local runtime
+bridge created by `weft setup`; callers that do not use that bridge must supply an
+explicit state directory:
 
 ```bash
 weft --format json --state-dir "$WEFT_STATE_DIR" <group> <command> ...
@@ -55,3 +57,5 @@ The envelope's `retryable` field is advisory within the class. A timeout or ambi
 Before a session ends, it should capture canonical content into a revision, record current assignment/materialization state, and release only authority it no longer owns. A replacement runtime resumes by reading the Change and assignment, acquiring or reclaiming an expired lease with a new lease ID, and materializing the exact canonical revision. It must not depend on the predecessor's dirty worktree.
 
 Paseo-specific placement and lifecycle mapping is documented in [PASEO.md](PASEO.md). Multi-agent ordering is documented in [MULTI_AGENT_WORKFLOWS.md](MULTI_AGENT_WORKFLOWS.md).
+Project-local setup, runtime bridge semantics, and diagnostic behavior are documented
+in [Runtime wiring](../docs/RUNTIME_WIRING.md).

@@ -48,6 +48,8 @@ pub(crate) enum Command {
     Help,
     Version,
     Init,
+    Setup(Options),
+    Doctor(Options),
     ChangeCreate(Options),
     ChangeShow(Options),
     ChangeHistory(Options),
@@ -110,6 +112,8 @@ impl Command {
             Self::Help => "help",
             Self::Version => "version",
             Self::Init => "init",
+            Self::Setup(_) => "setup",
+            Self::Doctor(_) => "doctor",
             Self::ChangeCreate(_) => "change.create",
             Self::ChangeShow(_) => "change.show",
             Self::ChangeHistory(_) => "change.history",
@@ -388,6 +392,10 @@ fn parse_command(
     let verb = arguments.get(index + 1).map(String::as_str);
     Ok(match (noun.as_str(), verb) {
         ("init", None) => Command::Init,
+        ("setup", _) => Command::Setup(Options::parse(&arguments[index + 1..], "setup", format)?),
+        ("doctor", _) => {
+            Command::Doctor(Options::parse(&arguments[index + 1..], "doctor", format)?)
+        }
         ("change", Some("create")) => Command::ChangeCreate(Options::parse(
             &arguments[index + 2..],
             "change.create",

@@ -66,6 +66,13 @@ Git, GitButler, Claude, Codex, Gemini, Paseo, and other systems are providers or
 
 Weft exposes readiness, assignment, leases, requested actions, and outcomes. An external orchestrator, CI system, shell, or human performs the work.
 
+### Invisible by default
+
+Humans install and wire Weft once, then continue using their existing agent runtime
+or orchestrator. Routine agents use Weft's durable protocol automatically; humans
+need only inspect or recover exceptional state. Weft must not require users to
+manually reproduce its internal Change lifecycle during normal agent-driven work.
+
 ### Local-first, scriptable, and recoverable
 
 The initial product works locally without a hosted service. Core behavior is available through a reusable API and a noninteractive CLI with stable JSON. Crashes, retries, expired leases, concurrent writers, and provider divergence are expected conditions.

@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 8 — minimal runtime archive checkpoint ready for CI.
+Phase 9 — runtime wiring in progress.
 
 ## Completed
 
@@ -189,6 +189,14 @@ Phase 8 — minimal runtime archive checkpoint ready for CI.
   proof, and the full `make check` gate.
 - Published the signed, GitHub-provenanced public `v0.1.0` Ubuntu 24.04 x86_64
   runtime archive with checksums and a CycloneDX SBOM.
+- Added project-local `weft setup` and read-only `weft doctor` runtime-wiring
+  commands. They initialize state, maintain non-destructive managed instruction
+  blocks for Codex, Claude Code, and Gemini CLI, publish a versioned bridge for
+  Paseo/OMC/OMG/OMX, and report runtime availability without launching tools.
+- Proved repeat setup byte stability, existing-content preservation, malformed
+  marker denial before state creation, unavailable-runtime diagnosis, JSON
+  contract behavior, the complete workspace gate, and clean installed-archive
+  setup/doctor smoke coverage.
 - Added an archive-to-archive upgrade/rollback checkpoint from that public runtime
   to the unpublished `v0.1.1` candidate, including durable-state reads after direct
   rollback and complete pre-upgrade state-snapshot restoration.
@@ -202,8 +210,9 @@ Phase 8 — minimal runtime archive checkpoint ready for CI.
 
 ## Next checkpoint
 
-Run the public pull-request gate for the minimal runtime archive, then retain all
-release checkpoints for the next authorized `v0.1.1` runtime release.
+Prove a native runtime adapter that carries the bridge's shared state into an
+isolated agent workspace and covers acquisition, checkpoint, session replacement,
+and release without making Weft a scheduler.
 
 ## Known gaps
 
