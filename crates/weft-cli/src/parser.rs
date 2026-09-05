@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::contract::Format;
 use crate::error::CliError;
@@ -9,6 +9,7 @@ use crate::error::CliError;
 pub(crate) struct Invocation {
     format: Format,
     state_dir: PathBuf,
+    verbose: bool,
     command: Command,
 }
 
@@ -27,6 +28,14 @@ impl Invocation {
 
     pub(crate) const fn command(&self) -> &Command {
         &self.command
+    }
+
+    pub(crate) const fn verbose(&self) -> bool {
+        self.verbose
+    }
+
+    pub(crate) fn state_dir(&self) -> &Path {
+        &self.state_dir
     }
 
     pub(crate) fn into_parts(self) -> (Format, PathBuf, Command) {
@@ -269,6 +278,7 @@ fn parse(arguments: Vec<OsString>) -> Result<Invocation, ParseError> {
         .collect::<Result<Vec<_>, _>>()?;
     let mut format = Format::Human;
     let mut state_dir = PathBuf::from(".weft");
+    let mut verbose = false;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
@@ -297,6 +307,10 @@ fn parse(arguments: Vec<OsString>) -> Result<Invocation, ParseError> {
                 state_dir = PathBuf::from(value);
                 index += 2;
             }
+            "-v" | "--verbose" => {
+                enable_verbose(&mut verbose, format)?;
+                index += 1;
+            }
             "--help" => {
                 index += 1;
                 if index != arguments.len() {
@@ -305,10 +319,11 @@ fn parse(arguments: Vec<OsString>) -> Result<Invocation, ParseError> {
                 return Ok(Invocation {
                     format,
                     state_dir,
+                    verbose,
                     command: Command::Help,
                 });
             }
-            "--version" => {
+            "-V" | "--version" => {
                 index += 1;
                 if index != arguments.len() {
                     return Err(parse_error(
@@ -320,6 +335,7 @@ fn parse(arguments: Vec<OsString>) -> Result<Invocation, ParseError> {
                 return Ok(Invocation {
                     format,
                     state_dir,
+                    verbose,
                     command: Command::Version,
                 });
             }
@@ -337,6 +353,7 @@ fn parse(arguments: Vec<OsString>) -> Result<Invocation, ParseError> {
         return Ok(Invocation {
             format,
             state_dir,
+            verbose,
             command: Command::Help,
         });
     }
@@ -344,8 +361,21 @@ fn parse(arguments: Vec<OsString>) -> Result<Invocation, ParseError> {
     Ok(Invocation {
         format,
         state_dir,
+        verbose,
         command,
     })
+}
+
+fn enable_verbose(verbose: &mut bool, format: Format) -> Result<(), ParseError> {
+    if *verbose {
+        return Err(parse_error(
+            format,
+            "unknown",
+            "duplicate global option --verbose",
+        ));
+    }
+    *verbose = true;
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]

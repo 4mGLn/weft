@@ -22,6 +22,19 @@ pub fn run(arguments: Vec<OsString>, stdout: &mut dyn Write, stderr: &mut dyn Wr
     let format = parsed
         .as_ref()
         .map_or_else(|_| Format::Human, Invocation::format);
+    if let Ok(invocation) = &parsed
+        && invocation.verbose()
+        && writeln!(
+            stderr,
+            "weft: command={} format={} state-dir={}",
+            invocation.command().name(),
+            format_name(invocation.format()),
+            invocation.state_dir().display()
+        )
+        .is_err()
+    {
+        return CliError::local("failed to write verbose diagnostic").exit_code();
+    }
     match parsed.and_then(execute) {
         Ok(success) => {
             if write_success(stdout, format, &success).is_err() {
@@ -41,6 +54,13 @@ pub fn run(arguments: Vec<OsString>, stdout: &mut dyn Write, stderr: &mut dyn Wr
             let _ = write_failure(target, failure.format, failure.command, &failure.error);
             failure.error.exit_code()
         }
+    }
+}
+
+const fn format_name(format: Format) -> &'static str {
+    match format {
+        Format::Human => "human",
+        Format::Json => "json",
     }
 }
 

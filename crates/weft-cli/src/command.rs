@@ -36,7 +36,7 @@ use crate::error::CliError;
 use crate::parser::{Command, Failure, Invocation, Options};
 
 const HELP: &str = "weft — exact local Change coordination\n\n\
-Usage:\n  weft [--format human|json] [--state-dir PATH] <command>\n\n\
+Usage:\n  weft [--format human|json] [--state-dir PATH] [-v|--verbose] <command>\n  weft [-V|--version]\n\n\
 Commands:\n  init\n  change create|show|history ...\n  revision append ...\n\
   assignment create|list|release ...\n  lease acquire|show|renew|release ...\n\
   relationship create|list|remove ...\n  dependency create|list|repin|remove ...\n\
@@ -68,7 +68,7 @@ fn execute_inner(invocation: Invocation) -> Result<Success, CliError> {
         Command::Help => Ok(Success {
             command: "help",
             data: json!({
-                "usage": "weft [--format human|json] [--state-dir PATH] <command>",
+                "usage": "weft [--format human|json] [--state-dir PATH] [-v|--verbose] <command>",
                 "commands": [
                     "init", "change.create", "change.show", "change.history", "revision.append",
                     "assignment.create", "assignment.list", "assignment.release",
