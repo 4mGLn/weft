@@ -343,10 +343,9 @@ fn setup_wires_project_context_idempotently_and_denies_malformed_markers() {
     assert!(agents.contains("<!-- weft:runtime-wiring:end -->"));
     assert!(project.join("CLAUDE.md").is_file());
     assert!(project.join("GEMINI.md").is_file());
-    let bridge_path = state.join("runtime-bridge.json");
-    let bridge = fs::read(&bridge_path).unwrap();
     let project_bridge_path = project.join(".weft/runtime-bridge.json");
-    assert_eq!(fs::read(&project_bridge_path).unwrap(), bridge);
+    let bridge = fs::read(&project_bridge_path).unwrap();
+    assert!(!state.join("runtime-bridge.json").exists());
     assert!(agents.contains(".weft/runtime-bridge.json"));
     assert!(agents.contains("--state-dir <configured-state-dir>"));
 
@@ -362,7 +361,6 @@ fn setup_wires_project_context_idempotently_and_denies_malformed_markers() {
     );
     assert_eq!(repeated.code, 0, "{}", repeated.stderr);
     assert_eq!(fs::read_to_string(&agents_path).unwrap(), agents);
-    assert_eq!(fs::read(&bridge_path).unwrap(), bridge);
     assert_eq!(fs::read(&project_bridge_path).unwrap(), bridge);
 
     let doctor = invoke_os(
@@ -405,9 +403,29 @@ fn setup_wires_project_context_idempotently_and_denies_malformed_markers() {
             .any(|problem| problem
                 .as_str()
                 .unwrap()
-                .contains("runtime-bridge.json is missing"))
+                .contains("runtime bridge is missing"))
     );
     fs::write(&project_bridge_path, &bridge).unwrap();
+
+    fs::write(
+        &agents_path,
+        "# Existing project rules\n\n<!-- weft:runtime-wiring:start -->\nmissing\n<!-- weft:runtime-wiring:end -->\n",
+    )
+    .unwrap();
+    let stale_instruction = invoke_os(
+        &state,
+        vec![
+            OsString::from("doctor"),
+            OsString::from("--project-dir"),
+            project.as_os_str().to_owned(),
+        ],
+    );
+    assert_eq!(stale_instruction.code, 0);
+    assert_eq!(
+        parse_one(&stale_instruction.stdout)["data"]["healthy"],
+        false
+    );
+    fs::write(&agents_path, &agents).unwrap();
 
     fs::write(
         project.join("GEMINI.md"),
@@ -426,7 +444,6 @@ fn setup_wires_project_context_idempotently_and_denies_malformed_markers() {
     );
     assert_eq!(malformed.code, 7);
     assert_eq!(fs::read_to_string(&agents_path).unwrap(), agents);
-    assert_eq!(fs::read(&bridge_path).unwrap(), bridge);
     assert_eq!(fs::read(&project_bridge_path).unwrap(), bridge);
 }
 

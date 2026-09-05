@@ -60,7 +60,7 @@ mkdir "$project"
 printf '%s\n' '# Existing project rules' > "$project/AGENTS.md"
 "$prefix/bin/weft" --format json --state-dir "$state" setup \
     --project-dir "$project" --runtime codex,claude-code,gemini-cli,paseo >/dev/null
-test -f "$state/runtime-bridge.json"
+test -f "$project/.weft/runtime-bridge.json"
 grep -q '<!-- weft:runtime-wiring:start -->' "$project/AGENTS.md"
 test -f "$project/CLAUDE.md"
 test -f "$project/GEMINI.md"

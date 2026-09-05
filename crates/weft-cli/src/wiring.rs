@@ -140,12 +140,8 @@ pub(crate) fn setup(
     }
     let bridge_bytes = serde_json::to_vec_pretty(&bridge)
         .map_err(|_| CliError::local("failed to encode runtime bridge"))?;
-    let state_bridge_path = state_dir.join(BRIDGE_FILE);
-    write_atomically_bytes(&state_bridge_path, &bridge_bytes)?;
     let project_bridge_path = project_dir.join(".weft").join(BRIDGE_FILE);
-    if project_bridge_path != state_bridge_path {
-        write_atomically_bytes(&project_bridge_path, &bridge_bytes)?;
-    }
+    write_atomically_bytes(&project_bridge_path, &bridge_bytes)?;
     Ok(bridge_view(&bridge, true, &[]))
 }
 
@@ -161,7 +157,7 @@ pub(crate) fn doctor(state_dir: &Path, project_dir: &Path) -> Result<Value, CliE
     let initialized = state_dir.is_dir()
         && sqlite_database(&state_dir.join("metadata.sqlite3"))
         && state_dir.join("artifacts").is_dir();
-    let bridge_path = state_dir.join(BRIDGE_FILE);
+    let bridge_path = project_dir.join(".weft").join(BRIDGE_FILE);
     let mut problems = Vec::new();
     let bridge = if bridge_path.is_file() {
         match fs::read(&bridge_path)
@@ -187,9 +183,6 @@ pub(crate) fn doctor(state_dir: &Path, project_dir: &Path) -> Result<Value, CliE
     if !initialized {
         problems.push("Weft state is not initialized".to_owned());
     }
-    if let Some(bridge) = &bridge {
-        project_bridge_problems(&project_dir, bridge, &mut problems);
-    }
     let mut value = bridge.map_or_else(
         || {
             json!({
@@ -201,6 +194,7 @@ pub(crate) fn doctor(state_dir: &Path, project_dir: &Path) -> Result<Value, CliE
             })
         },
         |bridge| {
+            configured_bridge_problems(&project_dir, state_dir, &bridge, &mut problems);
             runtime_instruction_problems(&project_dir, &bridge, &mut problems);
             bridge_view(&bridge, initialized, &[])
         },
@@ -281,6 +275,17 @@ fn managed_instruction(existing: &str) -> Result<String, CliError> {
     }
 }
 
+fn managed_block_is_current(existing: &str) -> bool {
+    let start_positions = positions(existing, MANAGED_START);
+    let end_positions = positions(existing, MANAGED_END);
+    match (start_positions.as_slice(), end_positions.as_slice()) {
+        ([start], [end]) if start < end => {
+            existing[*start..end + MANAGED_END.len()] == managed_block()
+        }
+        _ => false,
+    }
+}
+
 fn positions(text: &str, needle: &str) -> Vec<usize> {
     text.match_indices(needle).map(|(index, _)| index).collect()
 }
@@ -331,9 +336,7 @@ fn runtime_instruction_problems(
         if let Some(file) = &runtime.instruction_file {
             let path = project_dir.join(file);
             match fs::read_to_string(&path) {
-                Ok(content)
-                    if managed_instruction(&content).is_ok() && content.contains(MANAGED_START) => {
-                }
+                Ok(content) if managed_block_is_current(&content) => {}
                 Ok(_) => problems.push(format!(
                     "{} is missing a valid Weft managed block",
                     path.display()
@@ -344,23 +347,17 @@ fn runtime_instruction_problems(
     }
 }
 
-fn project_bridge_problems(project_dir: &Path, bridge: &RuntimeBridge, problems: &mut Vec<String>) {
-    let path = project_dir.join(".weft").join(BRIDGE_FILE);
-    match fs::read(&path)
-        .map_err(|_| CliError::local("failed to read project runtime bridge"))
-        .and_then(|bytes| {
-            serde_json::from_slice::<RuntimeBridge>(&bytes)
-                .map_err(|_| CliError::integrity("project runtime bridge is not valid JSON"))
-        }) {
-        Ok(project_bridge) if project_bridge == *bridge => {}
-        Ok(_) => problems.push(format!(
-            "{} does not match the configured runtime bridge",
-            path.display()
-        )),
-        Err(_) if !path.is_file() => {
-            problems.push(format!("{} is missing; run `weft setup`", path.display()));
-        }
-        Err(error) => problems.push(format!("{}: {}", path.display(), error.message())),
+fn configured_bridge_problems(
+    project_dir: &Path,
+    state_dir: &Path,
+    bridge: &RuntimeBridge,
+    problems: &mut Vec<String>,
+) {
+    if bridge.project_dir != display_path(project_dir) {
+        problems.push("runtime bridge belongs to a different project".to_owned());
+    }
+    if bridge.state_dir != display_path(state_dir) {
+        problems.push("runtime bridge points to a different state directory".to_owned());
     }
 }
 
@@ -457,7 +454,7 @@ mod tests {
 
     use super::{
         BRIDGE_FILE, BRIDGE_SCHEMA, Runtime, RuntimeBridge, RuntimeEntry, doctor,
-        executable_in_paths, managed_instruction, select_runtimes,
+        executable_in_paths, managed_block_is_current, managed_instruction, select_runtimes,
     };
 
     #[test]
@@ -465,6 +462,10 @@ mod tests {
         let first = managed_instruction("# Project rules\n").unwrap();
         assert!(first.starts_with("# Project rules\n\n"));
         assert_eq!(managed_instruction(&first).unwrap(), first);
+        assert!(managed_block_is_current(&first));
+        assert!(!managed_block_is_current(
+            "<!-- weft:runtime-wiring:start -->\nmissing\n<!-- weft:runtime-wiring:end -->"
+        ));
     }
 
     #[test]
@@ -523,8 +524,9 @@ mod tests {
                 instruction_file: None,
             }],
         };
+        fs::create_dir(project.join(".weft")).unwrap();
         fs::write(
-            state.join(BRIDGE_FILE),
+            project.join(".weft").join(BRIDGE_FILE),
             serde_json::to_vec(&bridge).unwrap(),
         )
         .unwrap();

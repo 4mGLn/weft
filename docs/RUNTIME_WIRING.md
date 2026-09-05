@@ -12,8 +12,8 @@ weft doctor
 
 `setup` initializes Weft state, writes `.weft/runtime-bridge.json` in the
 project as a discoverable pointer, and detects executable runtimes on `PATH`.
-When `--state-dir` selects an external state location, it also keeps the
-authoritative bridge beside that state. It never launches a detected executable, reads a
+The bridge is project-scoped even when `--state-dir` selects shared external state,
+so multiple worktrees can safely use the same state directory. It never launches a detected executable, reads a
 credential, changes user-home configuration, or schedules an agent.
 
 ## What setup wires
@@ -77,8 +77,8 @@ scheduler.
 weft --format json doctor
 ```
 
-Doctor verifies the state-directory shape and SQLite header, parses both bridge
-locations, checks managed instruction blocks, and checks whether each configured
+Doctor verifies the state-directory shape and SQLite header, parses the project-local
+bridge, checks the exact managed instruction blocks, and checks whether each configured
 executable is currently visible on `PATH`. Its JSON `healthy` field is the authoritative summary.
 A completed diagnostic may return `healthy: false`; that reports a condition to fix,
 not an implicit repair.
