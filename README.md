@@ -34,11 +34,25 @@ published.
 
 ## Start here
 
+After installation, wire Weft to the agent tools already used by a repository:
+
+```bash
+cd your-project
+weft setup
+weft doctor
+```
+
+Users then keep working through their usual agent runtime or orchestrator. Weft
+coordinates the agents' shared durable state underneath it; it does not replace or
+schedule them. See [Runtime wiring](docs/RUNTIME_WIRING.md) for the supported
+surfaces and boundaries.
+
 - [Product goal](docs/GOAL.md)
 - [Normative domain model](docs/DOMAIN.md)
 - [Implementation roadmap](docs/ROADMAP.md)
 - [Development guide](docs/DEVELOPMENT.md)
 - [Deployment and release policy](docs/DEPLOYMENT.md)
+- [Runtime wiring](docs/RUNTIME_WIRING.md)
 - [Agent instructions](AGENTS.md)
 
 ## Development
