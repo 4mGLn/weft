@@ -1,8 +1,22 @@
 # Weft CLI v1
 
-`weft` is a local, noninteractive executable. Every v1 command requires
-`--json`; the state directory defaults to `.weft` and can be explicitly set
-with `--state <directory>`.
+`weft` is a local, noninteractive executable. Human output is the default;
+`--format json` emits one `weft.cli.v1` envelope to standard output. JSON errors
+also use standard output so callers can parse one machine-readable result. The
+state directory defaults to `.weft` and can be explicitly set with
+`--state-dir <directory>`.
+
+## Global options
+
+```text
+weft [--format human|json] [--state-dir PATH] [-v|--verbose] <command>
+weft [-V|--version]
+```
+
+- `-V` and `--version` print the runtime version and accept no arguments.
+- `-v` and `--verbose` emit one diagnostic line to standard error containing
+  the parsed command, format, and state directory. They never alter the human
+  result or JSON envelope on standard output.
 
 ## Stable JSON envelope
 

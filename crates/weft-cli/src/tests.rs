@@ -272,6 +272,45 @@ fn human_mode_uses_stdout_for_success_and_stderr_for_failure() {
 }
 
 #[test]
+fn short_version_and_verbose_flags_preserve_machine_output() {
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let code = run(vec![OsString::from("-V")], &mut stdout, &mut stderr);
+    assert_eq!(code, 0);
+    assert_eq!(String::from_utf8(stdout).unwrap(), "weft 0.2.0\n");
+    assert!(stderr.is_empty());
+
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("state");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let code = run(
+        vec![
+            OsString::from("--format"),
+            OsString::from("json"),
+            OsString::from("-v"),
+            OsString::from("--state-dir"),
+            state.as_os_str().to_owned(),
+            OsString::from("init"),
+        ],
+        &mut stdout,
+        &mut stderr,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(
+        parse_one(&String::from_utf8(stdout).unwrap())["command"],
+        "init"
+    );
+    assert_eq!(
+        String::from_utf8(stderr).unwrap(),
+        format!(
+            "weft: command=init format=json state-dir={}\n",
+            state.display()
+        )
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn assignments_are_durable_and_terminal_release_requires_confirmation_and_exact_version() {
     let root = tempfile::tempdir().unwrap();
