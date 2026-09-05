@@ -91,7 +91,7 @@ impl Runtime {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct RuntimeBridge {
     schema: String,
     project_dir: String,
@@ -100,7 +100,7 @@ struct RuntimeBridge {
     runtimes: Vec<RuntimeEntry>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct RuntimeEntry {
     name: String,
     executable: String,
@@ -138,10 +138,14 @@ pub(crate) fn setup(
     for (path, content) in writes {
         write_atomically(&path, &content)?;
     }
-    let bridge_path = state_dir.join(BRIDGE_FILE);
     let bridge_bytes = serde_json::to_vec_pretty(&bridge)
         .map_err(|_| CliError::local("failed to encode runtime bridge"))?;
-    write_atomically_bytes(&bridge_path, &bridge_bytes)?;
+    let state_bridge_path = state_dir.join(BRIDGE_FILE);
+    write_atomically_bytes(&state_bridge_path, &bridge_bytes)?;
+    let project_bridge_path = project_dir.join(".weft").join(BRIDGE_FILE);
+    if project_bridge_path != state_bridge_path {
+        write_atomically_bytes(&project_bridge_path, &bridge_bytes)?;
+    }
     Ok(bridge_view(&bridge, true, &[]))
 }
 
@@ -182,6 +186,9 @@ pub(crate) fn doctor(state_dir: &Path, project_dir: &Path) -> Result<Value, CliE
     };
     if !initialized {
         problems.push("Weft state is not initialized".to_owned());
+    }
+    if let Some(bridge) = &bridge {
+        project_bridge_problems(&project_dir, bridge, &mut problems);
     }
     let mut value = bridge.map_or_else(
         || {
@@ -301,7 +308,9 @@ Assignment/Lease. Checkpoint canonical progress before handoff or session exit.\
 Never infer success from a runtime or provider result alone; record/reconcile\n\
 uncertain provider mutations through Weft. The external runtime or orchestrator\n\
 still launches and supervises agents—Weft does not schedule them.\n\n\
-Run `weft doctor` to inspect local wiring.\n\
+Read `.weft/runtime-bridge.json` to find the configured `state_dir`, then pass it\n\
+to Weft as `--state-dir`. Run `weft --state-dir <configured-state-dir> doctor`\n\
+to inspect local wiring.\n\
 {MANAGED_END}"
     )
 }
@@ -332,6 +341,26 @@ fn runtime_instruction_problems(
                 Err(_) => problems.push(format!("{} is unavailable", path.display())),
             }
         }
+    }
+}
+
+fn project_bridge_problems(project_dir: &Path, bridge: &RuntimeBridge, problems: &mut Vec<String>) {
+    let path = project_dir.join(".weft").join(BRIDGE_FILE);
+    match fs::read(&path)
+        .map_err(|_| CliError::local("failed to read project runtime bridge"))
+        .and_then(|bytes| {
+            serde_json::from_slice::<RuntimeBridge>(&bytes)
+                .map_err(|_| CliError::integrity("project runtime bridge is not valid JSON"))
+        }) {
+        Ok(project_bridge) if project_bridge == *bridge => {}
+        Ok(_) => problems.push(format!(
+            "{} does not match the configured runtime bridge",
+            path.display()
+        )),
+        Err(_) if !path.is_file() => {
+            problems.push(format!("{} is missing; run `weft setup`", path.display()));
+        }
+        Err(error) => problems.push(format!("{}: {}", path.display(), error.message())),
     }
 }
 
@@ -372,8 +401,21 @@ fn path_entries() -> Vec<PathBuf> {
 fn executable_in_paths(executable: &str, paths: &[PathBuf]) -> bool {
     paths.iter().any(|path| {
         let candidate = path.join(format!("{executable}{}", env::consts::EXE_SUFFIX));
-        candidate.is_file()
+        candidate.is_file() && executable_file(&candidate)
     })
+}
+
+#[cfg(unix)]
+fn executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    path.metadata()
+        .is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn executable_file(_path: &Path) -> bool {
+    true
 }
 
 fn sqlite_database(path: &Path) -> bool {
@@ -391,6 +433,8 @@ fn write_atomically_bytes(path: &Path, content: &[u8]) -> Result<(), CliError> {
     let parent = path
         .parent()
         .ok_or_else(|| CliError::local("runtime wiring path has no parent directory"))?;
+    fs::create_dir_all(parent)
+        .map_err(|_| CliError::local(format!("failed to create {}", parent.display())))?;
     let name = path
         .file_name()
         .ok_or_else(|| CliError::local("runtime wiring path has no file name"))?
@@ -441,6 +485,20 @@ mod tests {
             "never-present",
             &[PathBuf::from("/definitely/missing")]
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_detection_rejects_non_executable_regular_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let candidate = root.path().join("codex");
+        fs::write(&candidate, "not executable").unwrap();
+        fs::set_permissions(&candidate, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(!executable_in_paths("codex", &[root.path().to_owned()]));
+        fs::set_permissions(&candidate, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(executable_in_paths("codex", &[root.path().to_owned()]));
     }
 
     #[test]

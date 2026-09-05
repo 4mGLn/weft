@@ -10,8 +10,10 @@ weft setup
 weft doctor
 ```
 
-`setup` initializes `.weft/`, writes `.weft/runtime-bridge.json`, and detects
-available runtimes on `PATH`. It never launches a detected executable, reads a
+`setup` initializes Weft state, writes `.weft/runtime-bridge.json` in the
+project as a discoverable pointer, and detects executable runtimes on `PATH`.
+When `--state-dir` selects an external state location, it also keeps the
+authoritative bridge beside that state. It never launches a detected executable, reads a
 credential, changes user-home configuration, or schedules an agent.
 
 ## What setup wires
@@ -59,7 +61,10 @@ duplicated, or malformed, setup stops without modifying any wiring file.
 `.weft/runtime-bridge.json` is local configuration and is intentionally ignored by
 Git. It records the state location, `weft.cli.v1` protocol version, selected
 runtimes, their executable names, setup-time availability, and whether Weft wrote a
-project instruction block or only a bridge entry.
+project instruction block or only a bridge entry. Agents first read the project-local
+bridge and pass its `state_dir` as `--state-dir`; this keeps an external shared state
+location available from an isolated workspace without embedding an absolute path in
+tracked instruction files.
 
 An orchestrator reads that bridge, then uses the JSON protocol to create or inspect
 durable Changes, Assignments, Leases, revisions, candidates, and integration
@@ -72,9 +77,9 @@ scheduler.
 weft --format json doctor
 ```
 
-Doctor verifies the state-directory shape and SQLite header, parses the bridge,
-checks managed instruction blocks, and checks whether each configured executable is
-currently visible on `PATH`. Its JSON `healthy` field is the authoritative summary.
+Doctor verifies the state-directory shape and SQLite header, parses both bridge
+locations, checks managed instruction blocks, and checks whether each configured
+executable is currently visible on `PATH`. Its JSON `healthy` field is the authoritative summary.
 A completed diagnostic may return `healthy: false`; that reports a condition to fix,
 not an implicit repair.
 

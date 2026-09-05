@@ -345,6 +345,10 @@ fn setup_wires_project_context_idempotently_and_denies_malformed_markers() {
     assert!(project.join("GEMINI.md").is_file());
     let bridge_path = state.join("runtime-bridge.json");
     let bridge = fs::read(&bridge_path).unwrap();
+    let project_bridge_path = project.join(".weft/runtime-bridge.json");
+    assert_eq!(fs::read(&project_bridge_path).unwrap(), bridge);
+    assert!(agents.contains(".weft/runtime-bridge.json"));
+    assert!(agents.contains("--state-dir <configured-state-dir>"));
 
     let repeated = invoke_os(
         &state,
@@ -359,6 +363,7 @@ fn setup_wires_project_context_idempotently_and_denies_malformed_markers() {
     assert_eq!(repeated.code, 0, "{}", repeated.stderr);
     assert_eq!(fs::read_to_string(&agents_path).unwrap(), agents);
     assert_eq!(fs::read(&bridge_path).unwrap(), bridge);
+    assert_eq!(fs::read(&project_bridge_path).unwrap(), bridge);
 
     let doctor = invoke_os(
         &state,
@@ -380,6 +385,30 @@ fn setup_wires_project_context_idempotently_and_denies_malformed_markers() {
             .all(|problem| !problem.as_str().unwrap().contains("bridge is missing"))
     );
 
+    fs::remove_file(&project_bridge_path).unwrap();
+    let missing_project_bridge = invoke_os(
+        &state,
+        vec![
+            OsString::from("doctor"),
+            OsString::from("--project-dir"),
+            project.as_os_str().to_owned(),
+        ],
+    );
+    assert_eq!(missing_project_bridge.code, 0);
+    let missing_project_bridge = parse_one(&missing_project_bridge.stdout);
+    assert_eq!(missing_project_bridge["data"]["healthy"], false);
+    assert!(
+        missing_project_bridge["data"]["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|problem| problem
+                .as_str()
+                .unwrap()
+                .contains("runtime-bridge.json is missing"))
+    );
+    fs::write(&project_bridge_path, &bridge).unwrap();
+
     fs::write(
         project.join("GEMINI.md"),
         "<!-- weft:runtime-wiring:start -->\n",
@@ -398,6 +427,7 @@ fn setup_wires_project_context_idempotently_and_denies_malformed_markers() {
     assert_eq!(malformed.code, 7);
     assert_eq!(fs::read_to_string(&agents_path).unwrap(), agents);
     assert_eq!(fs::read(&bridge_path).unwrap(), bridge);
+    assert_eq!(fs::read(&project_bridge_path).unwrap(), bridge);
 }
 
 #[test]
