@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "smoke": ["repository-gate"],
+    "full": ["repository-gate", "native-git-spike"],
+    "release": ["repository-gate", "release-archive-smoke"],
+    "provider-observation": ["gitbutler-live"]
+  },
+  "suites": {
+    "repository-gate": {
+      "description": "Run the canonical local repository gate",
+      "kind": "deterministic",
+      "command": ["make", "check"],
+      "requiredCommands": ["make"],
+      "timeoutSeconds": 900
+    },
+    "native-git-spike": {
+      "description": "Reproduce the native Git feasibility evidence",
+      "kind": "deterministic",
+      "command": ["make", "phase0-native-git-spike"],
+      "requiredCommands": ["make", "git"],
+      "timeoutSeconds": 300
+    },
+    "package-release": {
+      "description": "Build the release archive for the declared version",
+      "kind": "deterministic",
+      "command": ["make", "package-release", "VERSION={version}"],
+      "requiresVariables": ["version"],
+      "requiredCommands": ["make"],
+      "timeoutSeconds": 900
+    },
+    "release-archive-smoke": {
+      "description": "Install, restart, and uninstall the declared release archive",
+      "kind": "deterministic",
+      "requires": ["package-release"],
+      "requiresVariables": ["version"],
+      "command": ["make", "test-release", "ARCHIVE=dist/weft-{release_version}-x86_64-unknown-linux-musl.tar.gz"],
+      "requiredCommands": ["make"],
+      "platforms": ["linux"],
+      "timeoutSeconds": 300
+    },
+    "gitbutler-live": {
+      "description": "Observe the explicitly version-gated GitButler adapter proof",
+      "kind": "observation",
+      "optional": true,
+      "command": ["make", "phase3-gitbutler-live"],
+      "requiredCommands": ["make", "but"],
+      "platforms": ["linux"],
+      "timeoutSeconds": 300
+    }
+  }
+}

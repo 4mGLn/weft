@@ -22,3 +22,4 @@ Each ADR records status, context, decision, alternatives, consequences, migratio
 - [ADR-0014: Minimal runtime archive and release metadata](0014-minimal-runtime-archive-and-release-metadata.md)
 - [ADR-0015: Stable latest-release Unix installer asset](0015-stable-latest-release-installer.md)
 - [ADR-0016: Local runtime wiring without embedded scheduling](0016-runtime-wiring-boundary.md)
+- [ADR-0017: Declarative QA profiles around the canonical gate](0017-declarative-qa-profiles.md)

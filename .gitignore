@@ -17,6 +17,8 @@ tmp/
 build/
 dist/
 coverage/
+qa/reports/
+__pycache__/
 target/
 .env
 .env.*

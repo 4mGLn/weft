@@ -9,6 +9,10 @@ Phase 9 — runtime wiring in progress.
 - Defined product goal, normative domain model, and implementation roadmap.
 - Resolved revision identity, canonical content, exact composition, review targeting, and integration semantics.
 - Established the evidence-driven development, review, CI, and specification-release harness.
+- Added a Weft-specific declarative QA harness with dependency-aware profiles,
+  bounded reports, explicit PASS/FAIL/BLOCKED/SKIPPED evidence, process-group
+  timeout cleanup, release archive smoke composition, and optional live-provider
+  observations; it preserves `make check` as the canonical gate.
 - Added a passing Native Git Phase 0 spike for canonical reconstruction, provider
   rewrite survival, candidate composition, target guarding, conflict capture, and
   external-ref reconciliation.
