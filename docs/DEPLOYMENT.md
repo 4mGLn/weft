@@ -6,6 +6,17 @@ The first deployable surface is the local `weft` CLI built and smoke-tested on G
 
 Tags matching `vMAJOR.MINOR.PATCH` run the repository gate, build a relocatable archive, smoke-test it in a clean temporary prefix, and attach GitHub build provenance. GitHub Releases publish the runtime archives plus a small Unix `install.sh` bootstrap asset under a stable name. The archive contains the binary, install/uninstall helpers, a small operator reference (`README.md`, `GETTING_STARTED.md`, `MANUAL.md`, `USAGE.md`, and `LICENSE`), the embedded `SBOM.cdx.json`, and `MANIFEST.sha256`; it does not contain the repository documentation tree or development scripts. The bootstrapper downloads the matching archive and verifies GitHub's published SHA-256 digest. CI generates and verifies SHA-256 sidecars and a CycloneDX dependency inventory; the SBOM is embedded at the archive root, not published as a separate asset. A tag must point to a commit on `main`. Publication requires explicit authorization.
 
+## Release preparation
+
+Before committing or pushing a release version bump, update the workspace version in
+`Cargo.toml`, refresh `Cargo.lock`, and update every version-sensitive test,
+documentation example, changelog entry, and release note. Run `make check`, verify
+`weft --version` reports the intended version, and run the release-archive package and
+install smoke tests. When upgrade/rollback behavior is in scope, run its smoke test
+against the intended prior public release. Only then create a signed release-preparation
+commit, merge it to `main`, and create a signed `vMAJOR.MINOR.PATCH` tag on that exact
+merged commit.
+
 ## Install and health
 
 Download the archive, optionally compare its SHA-256 digest with the digest displayed by GitHub, extract it, and install without elevated privileges:
