@@ -17,3 +17,4 @@
 | Provider-neutral agent protocol, Paseo boundary, and local runtime release | Accepted | `.agents/decisions/0013-agent-protocol-and-local-runtime-release.md` |
 | Stable latest-release Unix installer asset | Accepted | `.agents/decisions/0015-stable-latest-release-installer.md` |
 | Local runtime wiring without embedded scheduling | Accepted | `.agents/decisions/0016-runtime-wiring-boundary.md` |
+| Declarative QA profiles around the canonical gate | Accepted | `.agents/decisions/0017-declarative-qa-profiles.md` |

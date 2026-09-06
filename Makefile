@@ -1,14 +1,17 @@
-.PHONY: check docs-check harness-check rust-check phase0-spike phase0-native-git-spike phase0-gitbutler-spike phase3-gitbutler-live package-release test-release test-upgrade-rollback test-release-reproducibility
+.PHONY: check docs-check harness-check qa-self-test rust-check phase0-spike phase0-native-git-spike phase0-gitbutler-spike phase3-gitbutler-live package-release test-release test-upgrade-rollback test-release-reproducibility
 
 RUST_HOST := $(shell rustc -vV | sed -n 's/^host: //p')
 
-check: harness-check docs-check rust-check
+check: harness-check docs-check qa-self-test rust-check
 
 harness-check:
 	./scripts/verify-harness.sh
 
 docs-check:
 	python3 scripts/check_docs.py
+
+qa-self-test:
+	python3 qa/runner/harness.py self-test
 
 rust-check:
 	cargo fmt --all --check
