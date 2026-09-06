@@ -4,6 +4,7 @@ mod command;
 mod contract;
 mod error;
 mod parser;
+mod wiring;
 
 use std::ffi::OsString;
 use std::io::Write;

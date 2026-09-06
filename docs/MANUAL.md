@@ -15,17 +15,20 @@ service, open a network port, or select a state directory.
 
 ## State and operation
 
-Choose the state directory explicitly for every command:
+Run project-local setup once to initialize state and wire agent instructions:
 
 ```bash
-weft --state-dir /path/to/weft-state init
-weft --format json --state-dir /path/to/weft-state change create \
-  --change-id change-1 --operation-id create-1 --actor operator-1 --at 1000
+cd /path/to/project
+weft setup
+weft doctor
 ```
 
-The state directory holds Weft metadata and canonical artifacts. Keep it backed
-up before an upgrade or a destructive operator action. Provider repositories,
-worktrees, credentials, and agent sessions remain outside Weft state.
+Setup defaults to `.weft`; pass `--state-dir` when an external launcher manages
+the state location. The state directory holds Weft metadata and canonical
+artifacts. Keep it backed up before an upgrade or a destructive operator action.
+Provider repositories, worktrees, credentials, and agent sessions remain outside
+Weft state. Setup never launches agents, reads credentials, or changes user-home
+runtime configuration.
 
 ## Upgrade, rollback, and uninstall
 

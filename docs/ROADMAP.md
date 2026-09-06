@@ -57,6 +57,22 @@ Connect Paseo sessions and workspaces to Weft Changes, revisions, assignments, l
 
 Add richer orchestration integrations for dependency-aware execution requests, reviewer and resolver assignment, validation pipelines, composition planning, and integration ordering. Keep agent process scheduling and supervision outside Weft.
 
+## Phase 9 — Agent runtime wiring
+
+Make Weft invisible infrastructure for users who already work through agent
+runtimes and orchestrators. Provide a one-time, project-local setup path that
+initializes durable state, writes a versioned runtime bridge, and safely wires
+supported project instruction surfaces for Codex, Claude Code, and Gemini CLI.
+Expose runtime discovery and a read-only diagnostic command for Paseo, OMC, OMG,
+OMX, and future adapters.
+
+The wiring layer must not launch agents, choose models, modify user-home
+configuration, read credentials, or schedule work. Its output is a provider-neutral
+contract that external launchers use to acquire durable authority, pass exact
+context, checkpoint progress, and release/reconcile work. A runtime-specific native
+adapter is complete only after an end-to-end proof covers setup, acquisition,
+checkpoint, session replacement, and release.
+
 ## Phase acceptance
 
 Every phase must preserve immutable identity and history, use exact revision or candidate targets, avoid implicit dependency or provider retargeting, and leave uncertain mutations recoverable through reconciliation.

@@ -6,6 +6,7 @@
 *.log
 
 # Local agent/runtime state; canonical ledgers remain tracked.
+.weft/
 .omc/
 .omx/
 .playwright-cli/

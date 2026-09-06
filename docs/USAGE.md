@@ -3,6 +3,12 @@
 Run `weft --help` for the complete command grammar. Commands are
 noninteractive; JSON mode writes one `weft.cli.v1` envelope to stdout.
 
+For human setup, use `weft setup` once inside a repository and then continue
+using the existing agent runtime or orchestrator. `weft doctor` reads state and
+wiring health without modifying either. The runtime bridge at
+`.weft/runtime-bridge.json` tells an external launcher where shared local state
+is and which runtime surfaces setup configured.
+
 ```bash
 weft --format json --state-dir /path/to/weft-state init
 weft --format json --state-dir /path/to/weft-state change create \
@@ -10,6 +16,10 @@ weft --format json --state-dir /path/to/weft-state change create \
 weft --format json --state-dir /path/to/weft-state change show \
   --change-id change-1
 ```
+
+The commands after setup are agent/orchestrator protocol operations, not routine
+human interaction. A launcher creates and supervises sessions; Weft preserves
+Change identity, authority, exact revisions, and recovery evidence.
 
 Use a new caller-owned `--operation-id` for each distinct mutation. Commands
 that change a revision head or version require the observed expected value.

@@ -55,6 +55,17 @@ PREFIX="$prefix" "$package_dir/install.sh"
 "$prefix/bin/weft" --help >/dev/null
 state="$root/state"
 "$prefix/bin/weft" --format json --state-dir "$state" init >/dev/null
+project="$root/project"
+mkdir "$project"
+printf '%s\n' '# Existing project rules' > "$project/AGENTS.md"
+"$prefix/bin/weft" --format json --state-dir "$state" setup \
+    --project-dir "$project" --runtime codex,claude-code,gemini-cli,paseo >/dev/null
+test -f "$project/.weft/runtime-bridge.json"
+grep -q '<!-- weft:runtime-wiring:start -->' "$project/AGENTS.md"
+test -f "$project/CLAUDE.md"
+test -f "$project/GEMINI.md"
+"$prefix/bin/weft" --format json --state-dir "$state" doctor \
+    --project-dir "$project" >/dev/null
 "$prefix/bin/weft" --format json --state-dir "$state" change create \
     --change-id release-smoke --operation-id release-smoke-create \
     --actor release-test --at 1 >/dev/null

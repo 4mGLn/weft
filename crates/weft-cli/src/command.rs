@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use weft_artifact::ArtifactStore;
@@ -34,10 +34,11 @@ use weft_storage_sqlite::{
 use crate::contract::Success;
 use crate::error::CliError;
 use crate::parser::{Command, Failure, Invocation, Options};
+use crate::wiring;
 
 const HELP: &str = "weft — exact local Change coordination\n\n\
 Usage:\n  weft [--format human|json] [--state-dir PATH] [-v|--verbose] <command>\n  weft [-V|--version]\n\n\
-Commands:\n  init\n  change create|show|history ...\n  revision append ...\n\
+Commands:\n  init\n  setup [--project-dir PATH] [--runtime auto|all|NAME,...]\n  doctor [--project-dir PATH]\n  change create|show|history ...\n  revision append ...\n\
   assignment create|list|release ...\n  lease acquire|show|renew|release ...\n\
   relationship create|list|remove ...\n  dependency create|list|repin|remove ...\n\
   stack create|show|replace ...\n  candidate create|show|freshness ...\n\
@@ -65,39 +66,15 @@ pub(crate) fn execute(invocation: Invocation) -> Result<Success, Failure> {
 fn execute_inner(invocation: Invocation) -> Result<Success, CliError> {
     let (_format, state_dir, command) = invocation.into_parts();
     match command {
-        Command::Help => Ok(Success {
-            command: "help",
-            data: json!({
-                "usage": "weft [--format human|json] [--state-dir PATH] [-v|--verbose] <command>",
-                "commands": [
-                    "init", "change.create", "change.show", "change.history", "revision.append",
-                    "assignment.create", "assignment.list", "assignment.release",
-                    "lease.acquire", "lease.show", "lease.renew", "lease.release",
-                    "relationship.create", "relationship.list", "relationship.remove",
-                    "dependency.create", "dependency.list", "dependency.repin", "dependency.remove",
-                    "stack.create", "stack.show", "stack.replace",
-                    "candidate.create", "candidate.show", "candidate.freshness",
-                    "materialization.create", "materialization.show", "materialization.list",
-                    "materialization.transition", "review.request", "review.show", "review.submit",
-                    "review.submissions", "validation.record", "validation.show",
-                    "integration.plan", "integration.show", "integration.start", "integration.renew",
-                    "integration.uncertain", "integration.reconcile", "integration.conflict",
-                    "integration.succeed", "integration.finish", "integration.abort",
-                    "integration.supersede", "native-git.discover", "native-git.inspect",
-                    "native-git.capture", "native-git.materialize",
-                    "native-git.observe-materialization", "native-git.release-materialization",
-                    "native-git.execute-integration", "native-git.reconcile-integration",
-                    "gitbutler.discover"
-                ]
-            }),
-            human: HELP.to_owned(),
-        }),
+        Command::Help => Ok(help()),
         Command::Version => Ok(Success {
             command: "version",
             data: json!({"version": env!("CARGO_PKG_VERSION"), "schema": "weft.cli.v1"}),
             human: format!("weft {}", env!("CARGO_PKG_VERSION")),
         }),
         Command::Init => init(&state_dir),
+        Command::Setup(options) => setup(&state_dir, options),
+        Command::Doctor(options) => doctor(&state_dir, options),
         Command::ChangeCreate(options) => change_create(&state_dir, options),
         Command::ChangeShow(options) => change_show(&state_dir, options),
         Command::ChangeHistory(options) => change_history(&state_dir, options),
@@ -165,6 +142,36 @@ fn execute_inner(invocation: Invocation) -> Result<Success, CliError> {
     }
 }
 
+fn help() -> Success {
+    Success {
+        command: "help",
+        data: json!({
+            "usage": "weft [--format human|json] [--state-dir PATH] [-v|--verbose] <command>",
+            "commands": [
+                "init", "setup", "doctor", "change.create", "change.show", "change.history", "revision.append",
+                "assignment.create", "assignment.list", "assignment.release",
+                "lease.acquire", "lease.show", "lease.renew", "lease.release",
+                "relationship.create", "relationship.list", "relationship.remove",
+                "dependency.create", "dependency.list", "dependency.repin", "dependency.remove",
+                "stack.create", "stack.show", "stack.replace",
+                "candidate.create", "candidate.show", "candidate.freshness",
+                "materialization.create", "materialization.show", "materialization.list",
+                "materialization.transition", "review.request", "review.show", "review.submit",
+                "review.submissions", "validation.record", "validation.show",
+                "integration.plan", "integration.show", "integration.start", "integration.renew",
+                "integration.uncertain", "integration.reconcile", "integration.conflict",
+                "integration.succeed", "integration.finish", "integration.abort",
+                "integration.supersede", "native-git.discover", "native-git.inspect",
+                "native-git.capture", "native-git.materialize",
+                "native-git.observe-materialization", "native-git.release-materialization",
+                "native-git.execute-integration", "native-git.reconcile-integration",
+                "gitbutler.discover"
+            ]
+        }),
+        human: HELP.to_owned(),
+    }
+}
+
 fn init(state_dir: &Path) -> Result<Success, CliError> {
     if state_dir.exists() && !state_dir.is_dir() {
         return Err(CliError::usage("--state-dir exists and is not a directory"));
@@ -186,6 +193,47 @@ fn init(state_dir: &Path) -> Result<Success, CliError> {
         }),
         human: format!("initialized Weft state at {}", state_dir.display()),
     })
+}
+
+fn setup(state_dir: &Path, mut options: Options) -> Result<Success, CliError> {
+    let project_dir = project_dir(&mut options)?;
+    let runtime = options
+        .optional("runtime")
+        .unwrap_or_else(|| "auto".to_owned());
+    options.finish()?;
+    wiring::preflight(&project_dir, &runtime)?;
+    init(state_dir)?;
+    let data = wiring::setup(state_dir, &project_dir, &runtime)?;
+    let configured = data["runtimes"].as_array().map_or(0, Vec::len);
+    Ok(Success {
+        command: "setup",
+        data,
+        human: format!("initialized Weft and configured {configured} runtime bridge entries"),
+    })
+}
+
+fn doctor(state_dir: &Path, mut options: Options) -> Result<Success, CliError> {
+    let project_dir = project_dir(&mut options)?;
+    options.finish()?;
+    let data = wiring::doctor(state_dir, &project_dir)?;
+    let healthy = data["healthy"].as_bool().unwrap_or(false);
+    Ok(Success {
+        command: "doctor",
+        data,
+        human: if healthy {
+            "Weft runtime wiring is healthy".to_owned()
+        } else {
+            "Weft runtime wiring needs attention; use --format json for details".to_owned()
+        },
+    })
+}
+
+fn project_dir(options: &mut Options) -> Result<PathBuf, CliError> {
+    match options.optional("project-dir") {
+        Some(path) => Ok(PathBuf::from(path)),
+        None => std::env::current_dir()
+            .map_err(|_| CliError::local("failed to determine the current project directory")),
+    }
 }
 
 fn change_create(state_dir: &Path, mut options: Options) -> Result<Success, CliError> {

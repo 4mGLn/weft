@@ -21,3 +21,4 @@ Each ADR records status, context, decision, alternatives, consequences, migratio
 - [ADR-0013: Agent protocol and local runtime release](0013-agent-protocol-and-local-runtime-release.md)
 - [ADR-0014: Minimal runtime archive and release metadata](0014-minimal-runtime-archive-and-release-metadata.md)
 - [ADR-0015: Stable latest-release Unix installer asset](0015-stable-latest-release-installer.md)
+- [ADR-0016: Local runtime wiring without embedded scheduling](0016-runtime-wiring-boundary.md)

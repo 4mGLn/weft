@@ -20,27 +20,29 @@
    PREFIX="$HOME/.local" ./weft-<version>-x86_64-unknown-linux-musl/install.sh
    ```
 
-3. Choose a durable local state directory and initialize it:
+3. Enter the repository where you use agents and wire Weft once:
 
    ```bash
-   weft --state-dir "$HOME/.local/share/weft" init
+   cd your-project
+   weft setup
+   weft doctor
    ```
 
-4. Create the first durable Change:
+   Setup creates local durable state, detects supported agent tools, and wires
+   their project instruction surfaces where available. It does not launch an
+   agent, read a credential, or configure a user-home directory.
+
+4. Continue to use Codex, Claude Code, Gemini CLI, Paseo, or your existing
+   orchestrator normally. Weft provides their shared durable coordination state;
+   the runtime/orchestrator continues to launch and supervise agents.
+
+5. For an explicit or machine-managed setup, choose runtime names and consume
+   the JSON bridge:
 
    ```bash
-   weft --format json --state-dir "$HOME/.local/share/weft" change create \
-     --change-id first-change --operation-id first-change-create \
-     --actor your-name --at 1000
+   weft --format json setup --runtime codex,claude-code,gemini-cli
+   weft --format json doctor
    ```
 
-5. Inspect it:
-
-   ```bash
-   weft --state-dir "$HOME/.local/share/weft" change show \
-     --change-id first-change
-   ```
-
-Use an application-generated Unix-millisecond timestamp for production
-automation rather than the illustrative `1000` above. See `USAGE.md` for the
-noninteractive contract and `MANUAL.md` for operational boundaries.
+`USAGE.md` describes the JSON protocol used by agents and orchestrators.
+`MANUAL.md` describes local-state and support boundaries.

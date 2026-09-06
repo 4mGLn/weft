@@ -312,6 +312,169 @@ fn short_version_and_verbose_flags_preserve_machine_output() {
 
 #[test]
 #[allow(clippy::too_many_lines)]
+fn setup_wires_project_context_idempotently_and_denies_malformed_markers() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    let state = root.path().join("state");
+    fs::create_dir(&project).unwrap();
+    fs::write(project.join("AGENTS.md"), "# Existing project rules\n").unwrap();
+
+    let setup = invoke_os(
+        &state,
+        vec![
+            OsString::from("setup"),
+            OsString::from("--project-dir"),
+            project.as_os_str().to_owned(),
+            OsString::from("--runtime"),
+            OsString::from("codex,claude-code,gemini-cli,paseo"),
+        ],
+    );
+    assert_eq!(setup.code, 0, "{}", setup.stderr);
+    let setup = parse_one(&setup.stdout);
+    assert_eq!(setup["command"], "setup");
+    assert_eq!(setup["data"]["bridge_schema"], "weft.runtime-bridge.v1");
+    assert_eq!(setup["data"]["initialized"], true);
+    assert_eq!(setup["data"]["runtimes"].as_array().unwrap().len(), 4);
+
+    let agents_path = project.join("AGENTS.md");
+    let agents = fs::read_to_string(&agents_path).unwrap();
+    assert!(agents.starts_with("# Existing project rules\n\n"));
+    assert!(agents.contains("<!-- weft:runtime-wiring:start -->"));
+    assert!(agents.contains("<!-- weft:runtime-wiring:end -->"));
+    assert!(project.join("CLAUDE.md").is_file());
+    assert!(project.join("GEMINI.md").is_file());
+    let project_bridge_path = project.join(".weft/runtime-bridge.json");
+    let bridge = fs::read(&project_bridge_path).unwrap();
+    assert!(!state.join("runtime-bridge.json").exists());
+    assert!(agents.contains(".weft/runtime-bridge.json"));
+    assert!(agents.contains("--state-dir <configured-state-dir>"));
+
+    let repeated = invoke_os(
+        &state,
+        vec![
+            OsString::from("setup"),
+            OsString::from("--project-dir"),
+            project.as_os_str().to_owned(),
+            OsString::from("--runtime"),
+            OsString::from("codex,claude-code,gemini-cli,paseo"),
+        ],
+    );
+    assert_eq!(repeated.code, 0, "{}", repeated.stderr);
+    assert_eq!(fs::read_to_string(&agents_path).unwrap(), agents);
+    assert_eq!(fs::read(&project_bridge_path).unwrap(), bridge);
+
+    let doctor = invoke_os(
+        &state,
+        vec![
+            OsString::from("doctor"),
+            OsString::from("--project-dir"),
+            project.as_os_str().to_owned(),
+        ],
+    );
+    assert_eq!(doctor.code, 0, "{}", doctor.stderr);
+    let doctor = parse_one(&doctor.stdout);
+    assert_eq!(doctor["command"], "doctor");
+    assert_eq!(doctor["data"]["initialized"], true);
+    assert!(
+        doctor["data"]["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|problem| !problem.as_str().unwrap().contains("bridge is missing"))
+    );
+
+    fs::remove_file(&project_bridge_path).unwrap();
+    let missing_project_bridge = invoke_os(
+        &state,
+        vec![
+            OsString::from("doctor"),
+            OsString::from("--project-dir"),
+            project.as_os_str().to_owned(),
+        ],
+    );
+    assert_eq!(missing_project_bridge.code, 0);
+    let missing_project_bridge = parse_one(&missing_project_bridge.stdout);
+    assert_eq!(missing_project_bridge["data"]["healthy"], false);
+    assert!(
+        missing_project_bridge["data"]["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|problem| problem
+                .as_str()
+                .unwrap()
+                .contains("runtime bridge is missing"))
+    );
+    fs::write(&project_bridge_path, &bridge).unwrap();
+
+    fs::write(
+        &agents_path,
+        "# Existing project rules\n\n<!-- weft:runtime-wiring:start -->\nmissing\n<!-- weft:runtime-wiring:end -->\n",
+    )
+    .unwrap();
+    let stale_instruction = invoke_os(
+        &state,
+        vec![
+            OsString::from("doctor"),
+            OsString::from("--project-dir"),
+            project.as_os_str().to_owned(),
+        ],
+    );
+    assert_eq!(stale_instruction.code, 0);
+    assert_eq!(
+        parse_one(&stale_instruction.stdout)["data"]["healthy"],
+        false
+    );
+    fs::write(&agents_path, &agents).unwrap();
+
+    fs::write(
+        project.join("GEMINI.md"),
+        "<!-- weft:runtime-wiring:start -->\n",
+    )
+    .unwrap();
+    let malformed = invoke_os(
+        &state,
+        vec![
+            OsString::from("setup"),
+            OsString::from("--project-dir"),
+            project.as_os_str().to_owned(),
+            OsString::from("--runtime"),
+            OsString::from("codex,gemini-cli"),
+        ],
+    );
+    assert_eq!(malformed.code, 7);
+    assert_eq!(fs::read_to_string(&agents_path).unwrap(), agents);
+    assert_eq!(fs::read(&project_bridge_path).unwrap(), bridge);
+}
+
+#[test]
+fn setup_preflight_keeps_new_state_absent_when_instruction_markers_are_malformed() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    let state = root.path().join("state");
+    fs::create_dir(&project).unwrap();
+    fs::write(
+        project.join("GEMINI.md"),
+        "<!-- weft:runtime-wiring:start -->\n",
+    )
+    .unwrap();
+
+    let result = invoke_os(
+        &state,
+        vec![
+            OsString::from("setup"),
+            OsString::from("--project-dir"),
+            project.as_os_str().to_owned(),
+            OsString::from("--runtime"),
+            OsString::from("gemini-cli"),
+        ],
+    );
+    assert_eq!(result.code, 7);
+    assert!(!state.exists());
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
 fn assignments_are_durable_and_terminal_release_requires_confirmation_and_exact_version() {
     let root = tempfile::tempdir().unwrap();
     let state = root.path().join("state");
@@ -1480,6 +1643,24 @@ fn invoke<const N: usize>(state: &Path, arguments: [&str; N]) -> ResultOutput {
         state.as_os_str().to_owned(),
     ];
     values.extend(arguments.into_iter().map(OsString::from));
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let code = run(values, &mut stdout, &mut stderr);
+    ResultOutput {
+        code,
+        stdout: String::from_utf8(stdout).unwrap(),
+        stderr: String::from_utf8(stderr).unwrap(),
+    }
+}
+
+fn invoke_os(state: &Path, mut arguments: Vec<OsString>) -> ResultOutput {
+    let mut values = vec![
+        OsString::from("--format"),
+        OsString::from("json"),
+        OsString::from("--state-dir"),
+        state.as_os_str().to_owned(),
+    ];
+    values.append(&mut arguments);
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let code = run(values, &mut stdout, &mut stderr);
