@@ -277,7 +277,10 @@ fn short_version_and_verbose_flags_preserve_machine_output() {
     let mut stderr = Vec::new();
     let code = run(vec![OsString::from("-V")], &mut stdout, &mut stderr);
     assert_eq!(code, 0);
-    assert_eq!(String::from_utf8(stdout).unwrap(), "weft 0.2.0\n");
+    assert_eq!(
+        String::from_utf8(stdout).unwrap(),
+        format!("weft {}\n", env!("CARGO_PKG_VERSION"))
+    );
     assert!(stderr.is_empty());
 
     let root = tempfile::tempdir().unwrap();
