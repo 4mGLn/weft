@@ -8,7 +8,10 @@ Run all repository checks from the root:
 make check
 ```
 
-The current gate validates repository documentation, Rust formatting, workspace tests, and Clippy warnings. Provider spikes remain explicit targets because the GitButler spike requires a local GitButler installation and registry access.
+The current gate validates repository documentation, Rust formatting, workspace
+tests, Clippy warnings, and the deterministic Paseo lifecycle/session-resume
+adapter proofs. Provider spikes remain explicit targets because the GitButler
+spike requires a local GitButler installation and registry access.
 
 ## Rust workspace
 
@@ -51,13 +54,14 @@ Mutations require caller-owned operation IDs, actors, timestamps, and relevant e
 The initial deployable boundary is the Ubuntu 24.04 x86_64 local CLI archive:
 
 ```bash
-make package-release VERSION=v0.2.0
-make test-release ARCHIVE=dist/weft-0.2.0-x86_64-unknown-linux-musl.tar.gz
+make package-release VERSION=v0.2.1
+make test-release ARCHIVE=dist/weft-0.2.1-x86_64-unknown-linux-musl.tar.gz
 ```
 
 The smoke test verifies the checksum, installs into a disposable prefix, checks
-version/help, initializes state, creates and reads a Change across processes,
-uninstalls the binary, and proves state retention. It does not publish anything.
+version/help, initializes state, runs the installed Paseo adapter lifecycle,
+creates and reads a Change across processes, uninstalls the binary, and proves
+state retention. It does not publish anything.
 
 ## Work lifecycle
 

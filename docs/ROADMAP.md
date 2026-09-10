@@ -71,7 +71,9 @@ configuration, read credentials, or schedule work. Its output is a provider-neut
 contract that external launchers use to acquire durable authority, pass exact
 context, checkpoint progress, and release/reconcile work. A runtime-specific native
 adapter is complete only after an end-to-end proof covers setup, acquisition,
-checkpoint, session replacement, and release.
+checkpoint, session replacement, and release. The first proven native adapter is
+the Unix `weft-paseo-action` mapping; OMC, OMG, and OMX remain bridge-only until
+their own lifecycle contracts are proven.
 
 ## Phase acceptance
 

@@ -7,11 +7,15 @@ All notable project changes will be documented here.
 ### Added
 
 - Archive-to-archive `v0.1.0` to `v0.2.0` upgrade/rollback proof with checksum/SBOM verification, durable-state compatibility, and complete pre-upgrade snapshot restoration.
+- Versioned Unix `weft-paseo-action` lifecycle adapter with isolated-workspace
+  acquisition, checkpoint, session replacement, and release proof.
 
 ### Changed
 
 - Runtime releases publish only the installable archive. The archive no longer ships project documentation or development helpers; its embedded root SBOM remains covered by CI and provenance verification.
 - Runtime releases also publish a stable-name Unix `install.sh` bootstrap asset, enabling the latest published release to be installed without executing a script from the development branch.
+- Paseo bridge metadata and helper scripts now use the current `weft.cli.v1`
+  command grammar, with stale action invocations denied explicitly.
 
 ## 0.1.0 - 2026-08-27
 

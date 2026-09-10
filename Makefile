@@ -1,8 +1,8 @@
-.PHONY: check docs-check harness-check qa-self-test rust-check phase0-spike phase0-native-git-spike phase0-gitbutler-spike phase3-gitbutler-live package-release test-release test-upgrade-rollback test-release-reproducibility
+.PHONY: check docs-check harness-check qa-self-test rust-check agent-runtime-check phase6-paseo-bridge phase0-spike phase0-native-git-spike phase0-gitbutler-spike phase3-gitbutler-live package-release test-release test-upgrade-rollback test-release-reproducibility
 
 RUST_HOST := $(shell rustc -vV | sed -n 's/^host: //p')
 
-check: harness-check docs-check qa-self-test rust-check
+check: harness-check docs-check qa-self-test rust-check agent-runtime-check
 
 harness-check:
 	./scripts/verify-harness.sh
@@ -17,6 +17,12 @@ rust-check:
 	cargo fmt --all --check
 	cargo test --workspace --all-targets --target $(RUST_HOST)
 	cargo clippy --workspace --all-targets --target $(RUST_HOST) -- -D warnings
+
+agent-runtime-check:
+	./scripts/test-paseo-weft-bridge.sh
+	./scripts/test-cli-session-resume.sh
+
+phase6-paseo-bridge: agent-runtime-check
 
 phase0-native-git-spike:
 	./scripts/phase0-native-git-spike.sh

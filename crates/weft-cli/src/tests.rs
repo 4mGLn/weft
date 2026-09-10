@@ -338,6 +338,14 @@ fn setup_wires_project_context_idempotently_and_denies_malformed_markers() {
     assert_eq!(setup["data"]["bridge_schema"], "weft.runtime-bridge.v1");
     assert_eq!(setup["data"]["initialized"], true);
     assert_eq!(setup["data"]["runtimes"].as_array().unwrap().len(), 4);
+    let paseo = setup["data"]["runtimes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|runtime| runtime["name"] == "paseo")
+        .unwrap();
+    assert_eq!(paseo["integration"], "paseo-action-adapter-v2");
+    assert_eq!(paseo["adapter"], "weft-paseo-action");
 
     let agents_path = project.join("AGENTS.md");
     let agents = fs::read_to_string(&agents_path).unwrap();

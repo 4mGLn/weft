@@ -25,6 +25,13 @@ Paseo is Weft's first documented agent launcher integration. The integration is 
 
 Paseo may stop or archive a session at any point. Resume uses the durable procedure in [AGENT_PROTOCOL.md](AGENT_PROTOCOL.md), optionally in a new workspace and with a new agent. Workspace removal must never precede successful canonical capture when uncommitted work is intended to survive.
 
+The concrete Unix action mapping is documented in
+[PASEO_INTEGRATION.md](../docs/PASEO_INTEGRATION.md). Release archives expose
+`bin/weft-paseo-action`, a thin adapter for assignment/lease acquisition,
+checkpoint, exact-revision materialization, session replacement, observation,
+and release. It consumes the bridge-resolved state directory and explicit
+caller-owned IDs; it never launches or schedules the agent.
+
 ## Launch guidance
 
 Register the repository with `paseo project create`. Prefer worktree isolation for mutating agents and local isolation for read-only review. Select a human-configured Paseo agent profile by its current notes rather than hard-coding a provider/model in the repository. Use completion notifications to trigger inspection; do not poll agents as a scheduler loop.

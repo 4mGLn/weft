@@ -23,3 +23,4 @@ Each ADR records status, context, decision, alternatives, consequences, migratio
 - [ADR-0015: Stable latest-release Unix installer asset](0015-stable-latest-release-installer.md)
 - [ADR-0016: Local runtime wiring without embedded scheduling](0016-runtime-wiring-boundary.md)
 - [ADR-0017: Declarative QA profiles around the canonical gate](0017-declarative-qa-profiles.md)
+- [ADR-0018: Paseo action adapter and lifecycle proof](0018-paseo-action-adapter.md)
