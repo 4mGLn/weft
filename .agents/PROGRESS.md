@@ -2,7 +2,7 @@
 
 ## Current phase
 
-Phase 9 — runtime wiring in progress.
+Phase 9 — runtime wiring and the first native Paseo adapter complete.
 
 ## Completed
 
@@ -211,12 +211,25 @@ Phase 9 — runtime wiring in progress.
   a small operator reference, embedded SBOM, and manifest; project documentation
   and development helpers remain source-only, while releases publish only the
   installable archive.
+- Replaced stale Paseo helper invocations with the current `weft.cli.v1`
+  noun/verb grammar and added strict action-argument validation.
+- Added a versioned Unix `weft-paseo-action` adapter to the runtime bridge for
+  explicit assignment/lease acquisition and renewal, Native Git checkpoint,
+  exact-revision materialization/observation, handoff, session replacement, and
+  release; it never launches or schedules processes.
+- Added bridge metadata and diagnostics for the Paseo adapter, packaged it in
+  Unix runtime archives, and made the release smoke invoke the archived adapter
+  with the installed binary.
+- Proved the Paseo lifecycle across two isolated workspaces, including expired
+  lease reclaim and separate-process checkpoint/resume; the full `make check`
+  gate and v0.2.1 Linux archive smoke are green.
 
 ## Next checkpoint
 
-Prove a native runtime adapter that carries the bridge's shared state into an
-isolated agent workspace and covers acquisition, checkpoint, session replacement,
-and release without making Weft a scheduler.
+The first native runtime adapter is proven for Unix Paseo. Future expansion can
+add a Windows PowerShell adapter or other runtime-specific lifecycle adapters
+only with their own versioned end-to-end proof; OMC, OMG, and OMX remain
+bridge-only, and Codex/Claude Code/Gemini CLI remain instruction integrations.
 
 ## Known gaps
 

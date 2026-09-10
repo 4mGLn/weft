@@ -44,10 +44,13 @@ case "$target" in
     x86_64-pc-windows-msvc)
         install -m 0644 packaging/install.ps1 packaging/uninstall.ps1 "$stage/$package/"
         ;;
-    *) install -m 0755 packaging/install.sh packaging/uninstall.sh "$stage/$package/" ;;
+    *)
+        install -m 0755 packaging/install.sh packaging/uninstall.sh "$stage/$package/"
+        install -m 0755 scripts/paseo-weft-action.sh "$stage/$package/bin/weft-paseo-action"
+        ;;
 esac
 install -m 0644 docs/RUNTIME_README.md "$stage/$package/README.md"
-install -m 0644 docs/GETTING_STARTED.md docs/MANUAL.md docs/USAGE.md LICENSE "$stage/$package/"
+install -m 0644 docs/GETTING_STARTED.md docs/MANUAL.md docs/USAGE.md docs/PASEO_INTEGRATION.md LICENSE "$stage/$package/"
 
 mkdir -p "$output_dir"
 archive="$output_dir/$package.tar.gz"

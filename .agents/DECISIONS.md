@@ -18,3 +18,4 @@
 | Stable latest-release Unix installer asset | Accepted | `.agents/decisions/0015-stable-latest-release-installer.md` |
 | Local runtime wiring without embedded scheduling | Accepted | `.agents/decisions/0016-runtime-wiring-boundary.md` |
 | Declarative QA profiles around the canonical gate | Accepted | `.agents/decisions/0017-declarative-qa-profiles.md` |
+| Versioned Paseo action adapter with explicit lifecycle authority | Accepted | `.agents/decisions/0018-paseo-action-adapter.md` |

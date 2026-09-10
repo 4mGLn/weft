@@ -23,7 +23,7 @@ credential, changes user-home configuration, or schedules an agent.
 | Codex | Maintains a marked block in `AGENTS.md` | Codex remains the agent runtime. |
 | Claude Code | Maintains a marked block in `CLAUDE.md` | Claude Code remains the agent runtime. |
 | Gemini CLI | Maintains a marked block in `GEMINI.md` | Gemini CLI remains the agent runtime. |
-| Paseo | Publishes an entry in the runtime bridge | Paseo remains the launcher/supervisor. |
+| Paseo | Publishes a bridge entry consumed by the `weft-paseo-action` lifecycle adapter | Paseo remains the launcher/supervisor. |
 | OMC, OMG, OMX | Publishes an entry in the runtime bridge | Their adapters remain external to Weft. |
 
 The instruction block makes the durable protocol visible to supported code-agent
@@ -31,9 +31,11 @@ surfaces. It tells agents to use Weft's JSON CLI for shared coordination, to acq
 authority before shared mutation, and to checkpoint/reconcile rather than trusting
 ephemeral sessions or provider status.
 
-Bridge-only runtimes are discoverable but are not claimed as native lifecycle
-integrations. A native adapter requires its own proof that acquisition, checkpoint,
-session replacement, and release work end-to-end.
+OMC, OMG, and OMX remain bridge-only runtimes: discovery is not a claim that
+their lifecycle hooks are configured. Paseo has a versioned action adapter for
+explicit acquisition, checkpoint, replacement, and release; it has no authority
+to launch or schedule processes. A different runtime requires its own adapter
+and end-to-end proof before Weft can claim native lifecycle integration.
 
 ## Select runtimes explicitly
 
@@ -60,11 +62,11 @@ duplicated, or malformed, setup stops without modifying any wiring file.
 
 `.weft/runtime-bridge.json` is local configuration and is intentionally ignored by
 Git. It records the state location, `weft.cli.v1` protocol version, selected
-runtimes, their executable names, setup-time availability, and whether Weft wrote a
-project instruction block or only a bridge entry. Agents first read the project-local
-bridge and pass its `state_dir` as `--state-dir`; this keeps an external shared state
-location available from an isolated workspace without embedding an absolute path in
-tracked instruction files.
+runtimes, their executable names, setup-time availability, integration kind, and
+the optional adapter command. Agents first read the project-local bridge and pass
+its `state_dir` as `--state-dir`; this keeps an external shared state location
+available from an isolated workspace without embedding an absolute path in tracked
+instruction files.
 
 An orchestrator reads that bridge, then uses the JSON protocol to create or inspect
 durable Changes, Assignments, Leases, revisions, candidates, and integration
@@ -78,8 +80,9 @@ weft --format json doctor
 ```
 
 Doctor verifies the state-directory shape and SQLite header, parses the project-local
-bridge, checks the exact managed instruction blocks, and checks whether each configured
-executable is currently visible on `PATH`. Its JSON `healthy` field is the authoritative summary.
+bridge, checks the exact managed instruction blocks, validates the current Paseo
+adapter entry, and checks whether each configured executable is currently visible on
+`PATH`. Its JSON `healthy` field is the authoritative summary.
 A completed diagnostic may return `healthy: false`; that reports a condition to fix,
 not an implicit repair.
 
