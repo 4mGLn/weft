@@ -30,6 +30,11 @@ Provider repositories, worktrees, credentials, and agent sessions remain outside
 Weft state. Setup never launches agents, reads credentials, or changes user-home
 runtime configuration.
 
+On Unix-like archives, Paseo may invoke `bin/weft-paseo-action` using the
+explicit environment and action arguments in [Paseo Integration](PASEO_INTEGRATION.md).
+The adapter is not a process runner; Paseo remains responsible for launching,
+supervising, and replacing agent sessions.
+
 ## Upgrade, rollback, and uninstall
 
 Before upgrading, stop concurrent mutating callers and back up the complete

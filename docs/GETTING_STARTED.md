@@ -34,7 +34,10 @@
 
 4. Continue to use Codex, Claude Code, Gemini CLI, Paseo, or your existing
    orchestrator normally. Weft provides their shared durable coordination state;
-   the runtime/orchestrator continues to launch and supervise agents.
+   the runtime/orchestrator continues to launch and supervise agents. On
+   Unix-like archives, Paseo can call the bundled `bin/weft-paseo-action` for
+   explicit acquisition, checkpoint, replacement, and release actions; see
+   [Paseo Integration](PASEO_INTEGRATION.md).
 
 5. For an explicit or machine-managed setup, choose runtime names and consume
    the JSON bridge:

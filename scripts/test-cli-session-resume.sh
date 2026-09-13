@@ -6,6 +6,15 @@ root="$(mktemp -d /tmp/weft-cli-resume.XXXXXX)"
 trap 'rm -rf "$root"' EXIT
 repo="$root/repository"
 state="$root/state"
+weft_bin="${WEFT_BIN:-}"
+
+run_weft() {
+  if [[ -n "$weft_bin" ]]; then
+    "$weft_bin" --format json --state-dir "$state" "$@"
+  else
+    cargo run --offline -p weft-cli -- --format json --state-dir "$state" "$@"
+  fi
+}
 
 git init --quiet "$repo"
 git -C "$repo" config user.name Weft
@@ -17,16 +26,30 @@ git -C "$repo" commit --quiet -m base
 base="$(git -C "$repo" rev-parse HEAD)"
 printf 'canonical revision\n' > "$repo/file"
 git -C "$repo" commit --quiet -am revision
+revision="$(git -C "$repo" rev-parse HEAD)"
 
-cargo run --offline -p weft-cli -- --state "$state" change create change-1 --json >/dev/null
-cargo run --offline -p weft-cli -- --state "$state" change revise change-1 \
-  --repository "$repo" --base "$base" --revision revision-1 \
-  --expected-head none --json >/dev/null
+run_weft init >/dev/null
+run_weft change create \
+  --change-id change-1 \
+  --operation-id change-create-1 \
+  --actor prior-runtime \
+  --at 1000 >/dev/null
+run_weft native-git capture \
+  --repository "$repo" \
+  --repository-id repo-1 \
+  --base-revision "$base" \
+  --provider-revision "$revision" \
+  --change-id change-1 \
+  --revision-id revision-1 \
+  --expected-head none \
+  --operation-id revision-capture-1 \
+  --actor prior-runtime \
+  --at 1010 >/dev/null
 
 # This separate process simulates the prior runtime no longer existing.
-resumed="$(cargo run --offline -p weft-cli -- --state "$state" change show change-1 --json)"
-[[ "$resumed" == *'"headRevisionId":"revision-1"'* ]]
-cargo run --offline -p weft-cli -- --state "$state" history change-1 --json \
-  | grep -q 'revision-appended'
+resumed="$(run_weft change show --change-id change-1)"
+[[ "$resumed" == *'"head_revision_id":"revision-1"'* ]]
+run_weft change history --change-id change-1 \
+  | grep -q 'revision.appended'
 
 printf 'cli-session-resume: ok\n'

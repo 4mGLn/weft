@@ -7,7 +7,7 @@ does not start, stop, or supervise agents.
 
 | Workflow | Durable prerequisite | Orchestrator action |
 | --- | --- | --- |
-| Execute a Change | exact Change and acquired operation lease | Launch an implementer only after `change acquire` succeeds. |
+| Execute a Change | exact Change and acquired operation lease | Launch an implementer only after `lease acquire` succeeds. |
 | Review | exact revision/candidate and review request | Assign reviewer subject; record immutable review submission. |
 | Resolve conflict | durable conflict record and candidate | Assign resolver by handoff; create a successor revision, never mutate the conflicted one. |
 | Validate | exact revision/candidate | Run external pipeline and record its execution ID/status. |

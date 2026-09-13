@@ -41,7 +41,9 @@ test -f "$package_dir/README.md"
 test -f "$package_dir/GETTING_STARTED.md"
 test -f "$package_dir/MANUAL.md"
 test -f "$package_dir/USAGE.md"
+test -f "$package_dir/PASEO_INTEGRATION.md"
 test -f "$package_dir/LICENSE"
+test -x "$package_dir/bin/weft-paseo-action"
 test ! -e "$package_dir/docs"
 test ! -e "$package_dir/scripts"
 verify_manifest "$package_dir" "$package_dir/MANIFEST.sha256"
@@ -62,6 +64,7 @@ printf '%s\n' '# Existing project rules' > "$project/AGENTS.md"
     --project-dir "$project" --runtime codex,claude-code,gemini-cli,paseo >/dev/null
 test -f "$project/.weft/runtime-bridge.json"
 grep -q '<!-- weft:runtime-wiring:start -->' "$project/AGENTS.md"
+grep -q 'weft-paseo-action' "$project/.weft/runtime-bridge.json"
 test -f "$project/CLAUDE.md"
 test -f "$project/GEMINI.md"
 "$prefix/bin/weft" --format json --state-dir "$state" doctor \
@@ -71,6 +74,9 @@ test -f "$project/GEMINI.md"
     --actor release-test --at 1 >/dev/null
 "$prefix/bin/weft" --format json --state-dir "$state" change show \
     --change-id release-smoke >/dev/null
+WEFT_BIN="$prefix/bin/weft" \
+WEFT_ACTION_BIN="$package_dir/bin/weft-paseo-action" \
+    "$script_dir/test-paseo-weft-bridge.sh" >/dev/null
 PREFIX="$prefix" "$package_dir/uninstall.sh"
 test ! -e "$prefix/bin/weft"
 test -f "$state/metadata.sqlite3"

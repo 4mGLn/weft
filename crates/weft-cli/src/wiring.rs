@@ -69,9 +69,22 @@ impl Runtime {
     }
 
     const fn integration(self) -> &'static str {
-        match self.instruction_file() {
-            Some(_) => "project-instructions",
-            None => "runtime-bridge",
+        match self {
+            Self::Paseo => "paseo-action-adapter-v2",
+            Self::Omc | Self::Omg | Self::Omx => "runtime-bridge",
+            Self::Codex | Self::ClaudeCode | Self::GeminiCli => "project-instructions",
+        }
+    }
+
+    const fn adapter(self) -> Option<&'static str> {
+        match self {
+            Self::Paseo => Some("weft-paseo-action"),
+            Self::Codex
+            | Self::ClaudeCode
+            | Self::GeminiCli
+            | Self::Omc
+            | Self::Omg
+            | Self::Omx => None,
         }
     }
 
@@ -107,6 +120,8 @@ struct RuntimeEntry {
     detected: bool,
     integration: String,
     instruction_file: Option<String>,
+    #[serde(default)]
+    adapter: Option<String>,
 }
 
 pub(crate) fn setup(
@@ -131,6 +146,7 @@ pub(crate) fn setup(
                 detected: executable_in_paths(runtime.executable(), &path_entries),
                 integration: runtime.integration().to_owned(),
                 instruction_file: runtime.instruction_file().map(ToOwned::to_owned),
+                adapter: runtime.adapter().map(ToOwned::to_owned),
             })
             .collect(),
     };
@@ -359,6 +375,17 @@ fn configured_bridge_problems(
     if bridge.state_dir != display_path(state_dir) {
         problems.push("runtime bridge points to a different state directory".to_owned());
     }
+    for runtime in &bridge.runtimes {
+        if runtime.name == "paseo"
+            && (runtime.integration != "paseo-action-adapter-v2"
+                || runtime.adapter.as_deref() != Some("weft-paseo-action"))
+        {
+            problems.push(
+                "paseo runtime bridge entry lacks the current weft-paseo-action adapter; run `weft setup`"
+                    .to_owned(),
+            );
+        }
+    }
 }
 
 fn bridge_view(bridge: &RuntimeBridge, initialized: bool, problems: &[String]) -> Value {
@@ -373,7 +400,8 @@ fn bridge_view(bridge: &RuntimeBridge, initialized: bool, problems: &[String]) -
             "executable": runtime.executable,
             "detected": runtime.detected,
             "integration": runtime.integration,
-            "instruction_file": runtime.instruction_file
+            "instruction_file": runtime.instruction_file,
+            "adapter": runtime.adapter
         })).collect::<Vec<_>>(),
         "problems": problems
     })
@@ -517,11 +545,12 @@ mod tests {
             state_dir: state.display().to_string(),
             protocol: "weft.cli.v1".to_owned(),
             runtimes: vec![RuntimeEntry {
-                name: "test".to_owned(),
+                name: "paseo".to_owned(),
                 executable: "weft-test-runtime-never-present".to_owned(),
                 detected: false,
-                integration: "runtime-bridge".to_owned(),
+                integration: "paseo-action-adapter-v2".to_owned(),
                 instruction_file: None,
+                adapter: None,
             }],
         };
         fs::create_dir(project.join(".weft")).unwrap();
@@ -540,6 +569,12 @@ mod tests {
                 .iter()
                 .any(|value| value.as_str().unwrap().contains("unavailable on PATH"))
         );
+        assert!(report["problems"].as_array().unwrap().iter().any(|value| {
+            value
+                .as_str()
+                .unwrap()
+                .contains("lacks the current weft-paseo-action adapter")
+        }));
         assert_eq!(
             fs::read(state.join("metadata.sqlite3")).unwrap(),
             b"not sqlite"

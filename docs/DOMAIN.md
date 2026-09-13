@@ -245,27 +245,24 @@ The reusable domain API is independent of the CLI. The CLI exposes Change lifecy
 
 Structured commands support a stable JSON schema, documented field semantics and exit codes, noninteractive operation, explicit confirmation for destructive actions, expected-version inputs, and operation IDs for retryable operations.
 
-Representative commands include:
+Representative current CLI command families include:
 
 ```bash
-weft status --json
-weft change create
-weft change show <change-id> --json
-weft change revise <change-id> --expected-head <revision-id>
-weft change acquire <change-id>
-weft change handoff <change-id>
-weft dependency add <upstream>@<revision> <downstream>
-weft stack create
-weft candidate create --stack <stack-id>
-weft materialization create <revision-id>
-weft review request --candidate <candidate-id>
-weft review submit <review-id>
-weft validation record --candidate <candidate-id>
-weft conflict list
-weft integrate plan <candidate-id>
-weft integrate run <integration-id> --operation-id <operation-id> --yes
-weft reconcile
-weft history
+weft --format json --state-dir .weft init
+weft --format json --state-dir .weft change create \
+  --change-id change-1 --operation-id create-1 --actor agent-1 --at 1000
+weft --format json --state-dir .weft change show --change-id change-1
+weft --format json --state-dir .weft revision append ...
+weft --format json --state-dir .weft assignment create ...
+weft --format json --state-dir .weft lease acquire ...
+weft --format json --state-dir .weft candidate create ...
+weft --format json --state-dir .weft review request ...
+weft --format json --state-dir .weft validation record ...
+weft --format json --state-dir .weft integration plan ...
+weft --format json --state-dir .weft native-git execute-integration ...
+weft --format json --state-dir .weft native-git reconcile-integration ...
+weft --format json --state-dir .weft change history --change-id change-1
 ```
 
-Exact syntax may evolve, but the domain operations and machine-readable guarantees are required.
+See `docs/CLI.md` and `docs/USAGE.md` for the complete current grammar; the
+domain operations and machine-readable guarantees are required.
