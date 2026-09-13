@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-root="$(mktemp -d /tmp/weft-paseo-bridge.XXXXXX)"
+root="$(mktemp -d)"
 trap 'rm -rf "$root"' EXIT
 script_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 state="$root/state"

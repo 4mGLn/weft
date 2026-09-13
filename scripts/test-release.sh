@@ -74,9 +74,15 @@ test -f "$project/GEMINI.md"
     --actor release-test --at 1 >/dev/null
 "$prefix/bin/weft" --format json --state-dir "$state" change show \
     --change-id release-smoke >/dev/null
-WEFT_BIN="$prefix/bin/weft" \
-WEFT_ACTION_BIN="$package_dir/bin/weft-paseo-action" \
-    "$script_dir/test-paseo-weft-bridge.sh" >/dev/null
+if ! WEFT_BIN="$prefix/bin/weft" \
+    WEFT_ACTION_BIN="$package_dir/bin/weft-paseo-action" \
+    "$script_dir/test-paseo-weft-bridge.sh" >/dev/null; then
+    printf '%s\n' 'installed Paseo lifecycle smoke test failed; rerunning with Bash tracing' >&2
+    WEFT_BIN="$prefix/bin/weft" \
+    WEFT_ACTION_BIN="$package_dir/bin/weft-paseo-action" \
+        bash -x "$script_dir/test-paseo-weft-bridge.sh" >&2
+    exit 1
+fi
 PREFIX="$prefix" "$package_dir/uninstall.sh"
 test ! -e "$prefix/bin/weft"
 test -f "$state/metadata.sqlite3"
