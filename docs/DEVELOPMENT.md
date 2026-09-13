@@ -54,8 +54,8 @@ Mutations require caller-owned operation IDs, actors, timestamps, and relevant e
 The initial deployable boundary is the Ubuntu 24.04 x86_64 local CLI archive:
 
 ```bash
-make package-release VERSION=v0.2.1
-make test-release ARCHIVE=dist/weft-0.2.1-x86_64-unknown-linux-musl.tar.gz
+make package-release VERSION=v0.2.2
+make test-release ARCHIVE=dist/weft-0.2.2-x86_64-unknown-linux-musl.tar.gz
 ```
 
 The smoke test verifies the checksum, installs into a disposable prefix, checks
