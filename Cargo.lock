@@ -484,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "weft-artifact"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "sha2",
  "tempfile",
@@ -493,7 +493,7 @@ dependencies = [
 
 [[package]]
 name = "weft-cli"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -507,14 +507,14 @@ dependencies = [
 
 [[package]]
 name = "weft-domain"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "sha2",
 ]
 
 [[package]]
 name = "weft-provider-git"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "tempfile",
  "weft-artifact",
@@ -523,7 +523,7 @@ dependencies = [
 
 [[package]]
 name = "weft-provider-gitbutler"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -535,7 +535,7 @@ dependencies = [
 
 [[package]]
 name = "weft-storage-sqlite"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "rusqlite",
  "tempfile",
